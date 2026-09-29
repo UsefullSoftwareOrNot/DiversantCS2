@@ -1,0 +1,14 @@
+namespace CameraProbe;
+
+// ConVar compatibility is independent of the player schema in reference/.
+// Each supported build must also pass a complete live registry traversal.
+internal sealed record ConVarLayout(ulong InterfaceOffset)
+{
+    internal const int BuildNumberOffset = 6410728;
+
+    internal static ConVarLayout ForBuild(int build) => build switch
+    {
+        14185 or 14186 => new(3851888),
+        _ => throw new InvalidOperationException($"Unsupported ConVar engine build {build}; supported: 14185, 14186.")
+    };
+}

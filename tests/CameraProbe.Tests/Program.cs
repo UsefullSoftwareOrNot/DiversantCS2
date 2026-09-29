@@ -1,0 +1,366 @@
+using CameraProbe;
+using System.Runtime.InteropServices;
+
+int failed = 0;
+var tests = new (string Name, Action Run)[]
+{
+    ("automatic health recovery does not carry into respawn or another round", () =>
+    {
+        var s = new Snapshot { Team = 2, Health = 10000, LifeState = 2, PawnIsAlive = false,
+            PawnRuntimeClass = ".?AVC_CSPlayerPawn@@", ControllerPawn = 123, PlayerPawn = 123,
+            RoundStartCount = 1 };
+        if (!MovementExperimentPolicy.SameContext(s, 123, 2, 1)) throw new Exception("Lost established context");
+        s.RoundStartCount = 2;
+        if (MovementExperimentPolicy.SameContext(s, 123, 2, 1)) throw new Exception("Accepted new round");
+        s.RoundStartCount = 1; s.LifeState = 0;
+        if (MovementExperimentPolicy.SameContext(s, 123, 2, 1)) throw new Exception("Accepted respawn");
+        if (!MovementExperimentPolicy.ShouldRestore(1, true, true, temporaryHealth: 1))
+            throw new Exception("Legacy experiment restoration lost");
+    }),
+    ("movement probe requires zero health and an active camera recovery", () =>
+    {
+        var s = new Snapshot { Team = 2, Health = 0, LifeState = 2, PawnIsAlive = false,
+            PawnRuntimeClass = ".?AVC_CSPlayerPawn@@", ControllerPawn = 123, PlayerPawn = 123,
+            RoundStartCount = 1, FreezeTime = false, DeathTime = CameraExperimentPolicy.TemporaryDeathTime };
+        MovementExperimentPolicy.Require(s);
+        s.Health = 100; Reject(() => MovementExperimentPolicy.Require(s));
+        s.Health = 0; s.DeathTime = 123; Reject(() => MovementExperimentPolicy.Require(s));
+        s.DeathTime = CameraExperimentPolicy.TemporaryDeathTime; s.FreezeTime = true;
+        Reject(() => MovementExperimentPolicy.Require(s));
+    }),
+    ("movement probe preserves network updates and rejects ambiguous restoration", () =>
+    {
+        if (!MovementExperimentPolicy.ShouldRestore(10000, true, true)) throw new Exception("Lost temporary health");
+        if (MovementExperimentPolicy.ShouldRestore(0, false, false)) throw new Exception("Already restored");
+        if (MovementExperimentPolicy.ShouldRestore(75, true, false)) throw new Exception("Would overwrite network health");
+        Reject(() => MovementExperimentPolicy.ShouldRestore(10000, true, false));
+        Reject(() => MovementExperimentPolicy.ShouldRestore(256, false, true));
+    }),
+    ("camera recovery survives recorded health depletion only in an established bug", () =>
+    {
+        var recovery = new CameraRecoveryState();
+        var s = new Snapshot { Team = 3, Health = 0, LifeState = 2, PawnIsAlive = false,
+            PawnRuntimeClass = ".?AVC_CSPlayerPawn@@", ControllerPawn = 20349130,
+            PlayerPawn = 20349130, RoundStartCount = 11 };
+        Reject(() => recovery.Require(s));
+        s.Health = 8; recovery.Require(s);
+        s.Health = 0; recovery.Require(s);
+        s.RoundStartCount = 12; Reject(() => recovery.Require(s));
+        s.RoundStartCount = 11; Reject(() => recovery.Require(s));
+        s.Health = 100; recovery.Require(s);
+        s.Health = 0; s.ControllerPawn = 123; s.PlayerPawn = 123;
+        Reject(() => recovery.Require(s));
+    }),
+    ("camera recovery forgets the bug on respawn or observer transition", () =>
+    {
+        foreach (bool observer in new[] { false, true })
+        {
+            var recovery = new CameraRecoveryState();
+            var s = new Snapshot { Team = 2, Health = 100, LifeState = 2, PawnIsAlive = false,
+                PawnRuntimeClass = ".?AVC_CSPlayerPawn@@", ControllerPawn = 123, PlayerPawn = 123,
+                RoundStartCount = 1 };
+            recovery.Require(s);
+            if (observer) s.PawnRuntimeClass = ".?AVC_CSObserverPawn@@";
+            else s.LifeState = 0;
+            Reject(() => recovery.Require(s));
+            s.PawnRuntimeClass = ".?AVC_CSPlayerPawn@@"; s.LifeState = 2; s.Health = 0;
+            Reject(() => recovery.Require(s));
+        }
+    }),
+    ("active camera transaction ends on team or round change even at positive health", () =>
+    {
+        foreach (bool changeTeam in new[] { false, true })
+        {
+            var recovery = new CameraRecoveryState();
+            var original = new Snapshot { Team = 2, Health = 100, LifeState = 2, PawnIsAlive = false,
+                PawnRuntimeClass = ".?AVC_CSPlayerPawn@@", ControllerPawn = 123, PlayerPawn = 123,
+                RoundStartCount = 1 };
+            recovery.Require(original);
+            var next = new Snapshot { Team = changeTeam ? (byte)3 : (byte)2, Health = 100,
+                LifeState = 2, PawnIsAlive = false, PawnRuntimeClass = ".?AVC_CSPlayerPawn@@",
+                ControllerPawn = 123, PlayerPawn = 123, RoundStartCount = changeTeam ? 1 : 2 };
+            Reject(() => recovery.RequireContinuation(original, next));
+        }
+    }),
+    ("recovery distinguishes stable recycled handles from uncertain identity", () =>
+    {
+        ulong Pointer(ulong a) => a switch { 0x10010 => 0x20000, 0x20070 => 0x30000, 0x30010 => 0x20070, _ => throw new Exception("Unexpected read") };
+        uint Stable(ulong a) => a == 0x20080 ? 0x10001U : 0U;
+        if (LocalPawnResolver.Resolve(0x10000, 0x8001, Pointer, Stable, 16, retiredIsMissing: true) != 0)
+            throw new Exception("Recycled entity still matched");
+        int serialReads = 0;
+        uint Changing(ulong a) => a == 0x20080 ? (++serialReads == 1 ? 0x10001U : 0x8001U) : 0U;
+        Reject(() => LocalPawnResolver.Resolve(0x10000, 0x8001, Pointer, Changing, 16, retiredIsMissing: true));
+    }),
+    ("uncertain partial camera writes retain recovery work", () =>
+    {
+        byte[] partial = BitConverter.GetBytes(86.015625f);
+        partial[0] = BitConverter.GetBytes(1000000000f)[0];
+        Reject(() => CameraExperimentPolicy.ShouldRestore(BitConverter.ToSingle(partial), 86.015625f, false));
+        if (!CameraExperimentPolicy.ShouldRestore(1000000000f, 86.015625f, false)) throw new Exception("Owned write was not restored");
+        if (CameraExperimentPolicy.ShouldRestore(86.015625f, 86.015625f, false)) throw new Exception("Untouched value needs no write");
+        if (CameraExperimentPolicy.ShouldRestore(90f, 86.015625f, true)) throw new Exception("Would replace game update");
+    }),
+    ("round trip reapplies image values reset by team change", () =>
+    {
+        (int Fullbright, float Freeze) values = (0, 3);
+        bool switched = false;
+        ImageCommands.RoundTrip(() => values = (1, 1000), () => { switched = true; values = (0, 3); },
+            () => { if (!switched) throw new Exception("Missing switch"); });
+        if (values != (1, 1000)) throw new Exception("Team reset left image settings disabled");
+    }),
+    ("failed switch does not report post-switch images applied", () =>
+    {
+        int applications = 0;
+        Reject(() => ImageCommands.RoundTrip(() => applications++, () => throw new InvalidOperationException(), () => { }));
+        if (applications != 1) throw new Exception("Continued after failed team switch");
+    }),
+    ("camera experiment rejects ordinary alive and dead players", () =>
+    {
+        var s = new Snapshot { Team = 2, Health = 100, LifeState = 2, PawnIsAlive = false,
+            PawnRuntimeClass = ".?AVC_CSPlayerPawn@@", ControllerPawn = 123, PlayerPawn = 123 };
+        CameraExperimentPolicy.RequireBug(s);
+        s.Health = 0; Reject(() => CameraExperimentPolicy.RequireBug(s));
+        s.Health = 100; s.LifeState = 0; Reject(() => CameraExperimentPolicy.RequireBug(s));
+        s.LifeState = 2; s.PawnIsAlive = true; Reject(() => CameraExperimentPolicy.RequireBug(s));
+        s.PawnIsAlive = false; s.Team = 0; Reject(() => CameraExperimentPolicy.RequireBug(s));
+    }),
+    ("camera rollback preserves game changes", () =>
+    {
+        if (!CameraExperimentPolicy.OwnsValue(1000000000f)) throw new Exception("Lost owned value");
+        if (CameraExperimentPolicy.OwnsValue(70f) || CameraExperimentPolicy.OwnsValue(float.NaN))
+            throw new Exception("Would overwrite a game update");
+    }),
+    ("console submission waits for text then guards physical Enter", () =>
+    {
+        var events = new List<string>();
+        ConsoleSubmission.Execute("spec_freeze_time 1000", s => events.Add(s),
+            ms => events.Add($"wait:{ms}"), () => events.Add("guard"), () => events.Add("enter"));
+        if (!events.SequenceEqual(new[] { "spec_freeze_time 1000", "wait:120", "guard", "enter" }))
+            throw new Exception("Enter was sent before text processing or guard");
+    }),
+    ("console submission never sends Enter after cancellation during wait", () =>
+    {
+        bool entered = false;
+        Cancelled(() => ConsoleSubmission.Execute("mat_fullbright 1", _ => { },
+            _ => throw new OperationCanceledException(), () => { }, () => entered = true));
+        if (entered) throw new Exception("Submitted after cancellation");
+    }),
+    ("F6 applies and verifies image commands on every press", () =>
+    {
+        var sent = new List<string>();
+        (int Fullbright, float Freeze) values = (1, 1000);
+        void Send(string command)
+        {
+            sent.Add(command);
+            values = command.StartsWith("spec_freeze_time 1001;", StringComparison.Ordinal) ? (1, 1001) : (1, 1000);
+        }
+        ImageCommands.Apply(Send, () => values, _ => { });
+        ImageCommands.Apply(Send, () => values, _ => { });
+        if (sent.Count != 4 || sent.Count(s => s == ImageCommands.Target) != 2)
+            throw new Exception("Did not apply target values on both presses");
+    }),
+    ("key release retries once and reports persistent failure", () =>
+    {
+        int attempts = 0;
+        Native.ReleaseInputs([new Native.Input { Type = 1, Flags = 2 }], _ => ++attempts == 1 ? 0U : 1U);
+        if (attempts != 2) throw new Exception("Did not retry release");
+        Reject(() => Native.ReleaseInputs([new Native.Input { Type = 1, Flags = 2 }], _ => 0));
+    }),
+    ("already enabled values cannot impersonate a working console", () =>
+    {
+        int sent = 0;
+        Reject(() => ImageCommands.Apply(_ => sent++, () => (1, 1000f), _ => { }));
+        if (sent != 1) throw new Exception("Continued after console verification failed");
+    }),
+    ("cancelled image command application stops before target command", () =>
+    {
+        int sent = 0;
+        Cancelled(() => ImageCommands.Apply(_ => sent++, () => (0, 3f), _ => throw new OperationCanceledException()));
+        if (sent != 1) throw new Exception("Applied more commands after cancellation");
+    }),
+    ("CT switches to T and back", () => Equal(new ushort[] { 2, 3 }, SwitchPolicy.Teams(3, true, true, 75))),
+    ("T switches to CT and back", () => Equal(new ushort[] { 3, 2 }, SwitchPolicy.Teams(2, true, true, 75))),
+    ("background input rejected", () => Reject(() => SwitchPolicy.Teams(3, true, false, 75))),
+    ("live round input rejected", () => Reject(() => SwitchPolicy.Teams(3, false, true, 75))),
+    ("spectator input rejected", () => Reject(() => SwitchPolicy.Teams(1, true, true, 75))),
+    ("zero delay rejected", () => Reject(() => SwitchPolicy.Teams(3, true, true, 0))),
+    ("long delay rejected", () => Reject(() => SwitchPolicy.Teams(3, true, true, 1001))),
+    ("build mismatch rejected", () => Reject(() => Validation.Build(14185, 14184))),
+    ("build match accepted", () => Validation.Build(14185, 14185)),
+    ("ConVar profiles accept only inspected builds", () =>
+    {
+        _ = ConVarLayout.ForBuild(14185);
+        _ = ConVarLayout.ForBuild(14186);
+        Reject(() => ConVarLayout.ForBuild(14187));
+        Reject(() => ConVarLayout.ForBuild(0));
+    }),
+    ("new ConVar build does not enable old player schema", () => Reject(() => Validation.Build(14185, 14186))),
+    ("camera read failure preserves valid team switch state", () =>
+    {
+        var state = State();
+        GameReader.Optional(state, () => throw new InvalidOperationException("Pawn changed during camera read"));
+        Equal([2, 3], SwitchPolicy.Teams(state.Team ?? 0, state.FreezeTime == true, true, 75));
+        if (state.Warnings.Count != 1) throw new Exception("Lost camera diagnostic failure");
+    }),
+    ("local pawn resolver rejects a recycled entity slot", () =>
+    {
+        ulong Pointer(ulong address) => address switch { 0x10010 => 0x20000, 0x20070 => 0x30000, 0x30010 => 0x20070, _ => throw new Exception("Unexpected read") };
+        uint UInt(ulong address) => address == 0x20080 ? 0x10001U : 0U;
+        Reject(() => LocalPawnResolver.Resolve(0x10000, 0x8001, Pointer, UInt, 16));
+    }),
+    ("local pawn resolver uses full handle and back pointer", () =>
+    {
+        ulong Pointer(ulong address) => address switch { 0x10010 => 0x20000, 0x20070 => 0x30000, 0x30010 => 0x20070, _ => throw new Exception("Unexpected read") };
+        uint UInt(ulong address) => address == 0x20080 ? 0x8001U : 0U;
+        if (LocalPawnResolver.Resolve(0x10000, 0x8001, Pointer, UInt, 16) != 0x30000) throw new Exception("Wrong pawn");
+    }),
+    ("null pointer rejected", () => Reject(() => Validation.Pointer(0))),
+    ("kernel pointer rejected", () => Reject(() => Validation.Pointer(0xFFFF800000000000))),
+    ("short read rejected", () => Reject(() => Validation.ReadLength(3, 4))),
+    ("exact read accepted", () => Validation.ReadLength(4, 4)),
+    ("NaN vector rejected", () => Reject(() => Validation.Vector([1, float.NaN, 3]))),
+    ("finite vector accepted", () => Validation.Vector([1, 2, 3])),
+    ("sequence performs round trip", () =>
+    {
+        var taps = new List<ushort>();
+        SwitchSequence.Execute(() => State(), () => true, () => { }, taps.Add, (_, guard) => guard(), (_, _) => { }, 75);
+        Equal([2, 3], taps.ToArray());
+    }),
+    ("fresh state blocks first input after freeze ends", () =>
+    {
+        int taps = 0;
+        Reject(() => SwitchSequence.Execute(() => State(false), () => true, () => { }, _ => taps++, (_, guard) => guard(), (_, _) => { }, 75));
+        if (taps != 0) throw new Exception("Sent input after freeze time");
+    }),
+    ("cancel during second capture blocks return", () =>
+    {
+        int captures = 0, taps = 0;
+        bool cancelled = false;
+        Cancelled(() => SwitchSequence.Execute(() => { cancelled = ++captures == 2; return State(); }, () => true,
+            () => { if (cancelled) throw new OperationCanceledException(); }, _ => taps++, (_, guard) => guard(), (_, _) => { }, 75));
+        if (taps != 1) throw new Exception("Return input sent after cancellation");
+    }),
+    ("focus loss during delay is latched", () =>
+    {
+        bool foreground = true;
+        int taps = 0;
+        Reject(() => SwitchSequence.Execute(() => State(), () => foreground, () => { }, _ => taps++,
+            (_, guard) => { foreground = false; guard(); foreground = true; }, (_, _) => { }, 75));
+        if (taps != 1) throw new Exception("Incorrect input count after focus loss");
+    }),
+    ("fullbright changes cheat flag only", () =>
+    {
+        if (ConVarPolicy.Unlock("mat_fullbright", 3, 0x400004000) != 0x400000000)
+            throw new Exception("Incorrect fullbright flag mask");
+    }),
+    ("freeze time changes replicated flag only", () =>
+    {
+        if (ConVarPolicy.Unlock("spec_freeze_time", 7, 0x28200C) != 0x28000C)
+            throw new Exception("Incorrect freeze flag mask");
+    }),
+    ("unknown cvar rejected", () => Reject(() => ConVarPolicy.Mask("sv_cheats", 0))),
+    ("wrong fullbright type rejected", () => Reject(() => ConVarPolicy.Mask("mat_fullbright", 7))),
+    ("restore preserves unrelated flag changes", () =>
+    {
+        if (ConVarPolicy.Restore("mat_fullbright", 3, 0x400004000, 0x400000080) != 0x400004080)
+            throw new Exception("Unrelated flags overwritten");
+    }),
+    ("restore does not add a flag absent originally", () =>
+    {
+        if (ConVarPolicy.Restore("spec_freeze_time", 7, 0x28000C, 0x28200C) != 0x28000C)
+            throw new Exception("Original restriction state not restored");
+    }),
+    ("registry reallocation rejects saved identity", () =>
+    {
+        var original = Entry("mat_fullbright", 3, 0x4000);
+        Reject(() => ConVarRecovery.ValidateIdentity(original, original with { NodeAddress = 0x70000 }));
+    }),
+    ("restoration attempts both entries when one write fails", () =>
+    {
+        var entries = new[] { Entry("mat_fullbright", 3, 0x4000), Entry("spec_freeze_time", 7, 0x2000) };
+        var values = entries.ToDictionary(e => e.Name, _ => 0UL);
+        int writes = 0;
+        var errors = ConVarRecovery.RestoreFlags(entries, e => values[e.Name], (e, value) =>
+        {
+            writes++;
+            if (e.Name == "spec_freeze_time") throw new IOException("Injected write failure");
+            values[e.Name] = value;
+        });
+        if (writes != 2 || errors.Length != 1 || values["mat_fullbright"] != 0x4000)
+            throw new Exception("Rollback did not attempt both entries");
+    }),
+    ("restoration detects a write that did not persist", () =>
+    {
+        var errors = ConVarRecovery.RestoreFlags([Entry("mat_fullbright", 3, 0x4000)], _ => 0, (_, _) => { });
+        if (errors.Length != 1) throw new Exception("Lost restoration failure");
+    }),
+    ("failed journal write leaves no authoritative journal", () =>
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "camera-probe-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, "journal.json");
+        try { JournalStorage.Publish(path, stream => { stream.WriteByte(123); throw new IOException("Injected disk failure"); }); }
+        catch (IOException) { }
+        if (File.Exists(path)) throw new Exception("Incomplete journal was published");
+    }),
+    ("journal publication refuses an existing journal", () =>
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "camera-probe-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, "journal.json");
+        File.WriteAllText(path, "original");
+        bool rejected = false;
+        try { JournalStorage.Publish(path, stream => stream.WriteByte(123)); } catch (IOException) { rejected = true; }
+        if (!rejected || File.ReadAllText(path) != "original") throw new Exception("Original journal overwritten");
+    }),
+    ("native flag write changes exactly eight bytes in the test process", () =>
+    {
+        nint memory = Marshal.AllocHGlobal(24);
+        try
+        {
+            Marshal.Copy(Enumerable.Repeat((byte)0xA5, 24).ToArray(), 0, memory, 24);
+            using var handle = Native.OpenProcess(0x20 | 0x08, false, Environment.ProcessId);
+            if (handle.IsInvalid) throw new Exception("Cannot open test process");
+            ConVarSession.WriteFlags(handle, (ulong)(memory + 8), 0x1234567812345678);
+            byte[] result = new byte[24];
+            Marshal.Copy(memory, result, 0, 24);
+            if (result.Take(8).Concat(result.Skip(16)).Any(b => b != 0xA5) ||
+                BitConverter.ToUInt64(result, 8) != 0x1234567812345678)
+                throw new Exception("Write value or boundaries incorrect");
+        }
+        finally { Marshal.FreeHGlobal(memory); }
+    }),
+    ("aborted return retains between snapshot", () =>
+    {
+        int captures = 0, taps = 0;
+        var kinds = new List<string>();
+        Reject(() => SwitchSequence.Execute(() => { var s = State(); s.RoundStartCount = ++captures; return s; },
+            () => true, () => { }, _ => taps++, (_, guard) => guard(), (kind, _) => kinds.Add(kind), 75));
+        if (taps != 1 || !kinds.Contains("between")) throw new Exception("Lost abort evidence or sent wrong input");
+    })
+};
+foreach (var test in tests)
+{
+    try { test.Run(); Console.WriteLine($"PASS {test.Name}"); }
+    catch (Exception ex) { failed++; Console.WriteLine($"FAIL {test.Name}: {ex.Message}"); }
+}
+Console.WriteLine($"{tests.Length - failed}/{tests.Length} passed");
+return failed == 0 ? 0 : 1;
+
+static void Equal(ushort[] expected, ushort[] actual)
+{
+    if (!expected.SequenceEqual(actual)) throw new Exception("Incorrect key order");
+}
+static void Reject(Action action)
+{
+    try { action(); } catch (InvalidOperationException) { return; }
+    throw new Exception("Expected rejection");
+}
+static Snapshot State(bool freeze = true) => new() { Team = 3, FreezeTime = freeze, RoundStartCount = 1 };
+static ConVarEntry Entry(string name, short type, ulong flags) => new(name, type, flags, "0", 0x10000, 0x20000, 0x30000);
+static void Cancelled(Action action)
+{
+    try { action(); } catch (OperationCanceledException) { return; }
+    throw new Exception("Expected cancellation");
+}

@@ -1,0 +1,6 @@
+**/bin/
+**/obj/
+artifacts/
+captures/
+.dotnet-home/
+reference/*.tmp

@@ -195,7 +195,8 @@ internal static class CameraExperiment
         if (!reader.HasExited && journal.ProcessId == reader.ProcessId && journal.StartTicks == reader.StartTicks &&
             reader.MatchesCameraPawn(journal.EntityHandle, journal.Pawn))
         {
-            if (journal.Build != 14186 || journal.Address != journal.Pawn + 5208 || !float.IsFinite(journal.Original))
+            _ = PlayerCodeLayout.ForBuild(journal.Build);
+            if (journal.Build != reader.Build || journal.Address != journal.Pawn + 5208 || !float.IsFinite(journal.Original))
                 throw new InvalidOperationException("Invalid camera restoration target.");
             float current = reader.Read<float>(journal.Address);
             if (CameraExperimentPolicy.ShouldRestore(current, journal.Original, applicationCompleted))

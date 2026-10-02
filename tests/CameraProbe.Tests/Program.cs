@@ -4,6 +4,22 @@ using System.Runtime.InteropServices;
 int failed = 0;
 var tests = new (string Name, Action Run)[]
 {
+    ("engine build location follows relocated RIP-relative code", () =>
+    {
+        byte[] Pattern(int displacement)
+        {
+            byte[] code = Convert.FromHexString("890500000000488D0D11223344FF1555667788488B0D");
+            BitConverter.GetBytes(displacement).CopyTo(code, 2);
+            return code;
+        }
+        if (EngineBuildLocator.FindOffset(new[] { (0x1000, Pattern(0x2FFA)) }, 0x6000) != 0x4000)
+            throw new Exception("Forward displacement resolved incorrectly");
+        if (EngineBuildLocator.FindOffset(new[] { (0x5000, Pattern(-0x1006)) }, 0x6000) != 0x4000)
+            throw new Exception("Signed backward displacement resolved incorrectly");
+        Reject(() => EngineBuildLocator.FindOffset(new[] { (0x1000, Pattern(0x2FFA)), (0x2000, Pattern(0x1FFA)) }, 0x6000));
+        Reject(() => EngineBuildLocator.FindOffset(new[] { (0x1000, Pattern(int.MaxValue)) }, 0x6000));
+        Reject(() => EngineBuildLocator.FindOffset(new[] { (0x1000, new byte[21]) }, 0x6000));
+    }),
     ("automatic health recovery does not carry into respawn or another round", () =>
     {
         var s = new Snapshot { Team = 2, Health = 10000, LifeState = 2, PawnIsAlive = false,
@@ -192,8 +208,38 @@ var tests = new (string Name, Action Run)[]
     {
         _ = ConVarLayout.ForBuild(14185);
         _ = ConVarLayout.ForBuild(14186);
+        _ = ConVarLayout.ForBuild(14188);
         Reject(() => ConVarLayout.ForBuild(14187));
+        Reject(() => ConVarLayout.ForBuild(14189));
         Reject(() => ConVarLayout.ForBuild(0));
+    }),
+    ("player code profiles use inspected instructions for each supported build", () =>
+    {
+        var old = PlayerCodeLayout.ForBuild(14186);
+        if (old.CameraEntryRva != 0x882F7C || old.MovementHealthRva != 0x8C529E)
+            throw new Exception("14186 code profile changed");
+        var current = PlayerCodeLayout.ForBuild(14188);
+        if (current.CameraEntryRva != 0x8827BC || current.CameraDeathLoadRva != 0x8827E7 ||
+            current.CameraCompareRva != 0x88280C || current.MovementHealthRva != 0x8C4ADE)
+            throw new Exception("14188 code profile does not match inspected instructions");
+        Reject(() => PlayerCodeLayout.ForBuild(14187));
+        Reject(() => PlayerCodeLayout.ForBuild(14189));
+    }),
+    ("player schema selection keeps legacy root and uses a build directory when present", () =>
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"camera-probe-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(root);
+            File.WriteAllText(Path.Combine(root, "info.json"), "{\"build_number\":14186}");
+            string current = Path.Combine(root, "builds", "14188");
+            Directory.CreateDirectory(current);
+            File.WriteAllText(Path.Combine(current, "info.json"), "{\"build_number\":14188}");
+            if (ReferenceProfile.Resolve(root, 14186) != root) throw new Exception("Legacy schema was not selected");
+            if (ReferenceProfile.Resolve(root, 14188) != current) throw new Exception("Build schema was not selected");
+            Reject(() => ReferenceProfile.Resolve(root, 14189));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }),
     ("new ConVar build does not enable old player schema", () => Reject(() => Validation.Build(14185, 14186))),
     ("camera read failure preserves valid team switch state", () =>

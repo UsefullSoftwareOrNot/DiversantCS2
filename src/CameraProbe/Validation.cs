@@ -4,7 +4,7 @@ public static class Validation
     public static void Build(int expected, int actual)
     {
         if (expected <= 0 || expected != actual)
-            throw new InvalidOperationException($"Unsupported engine build {actual}; schema requires {expected}.");
+            throw new InvalidOperationException($"Detected engine build {actual}; player schema supports {expected}. Schema and recovery code must be verified for this build before memory writes can start.");
     }
     public static void Pointer(ulong address)
     {

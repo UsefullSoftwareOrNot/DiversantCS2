@@ -141,11 +141,13 @@ internal static class MovementExperiment
         if (!File.Exists(JournalPath)) return;
         var j = JsonSerializer.Deserialize<MovementJournal>(File.ReadAllText(JournalPath))
             ?? throw new InvalidOperationException("Invalid movement journal.");
-        if (j.Build != 14186 || j.Address != j.Pawn + 844 || j.Team is not (2 or 3) || j.TemporaryHealth is not (1 or 10000))
+        _ = PlayerCodeLayout.ForBuild(j.Build);
+        if (j.Address != j.Pawn + 844 || j.Team is not (2 or 3) || j.TemporaryHealth is not (1 or 10000))
             throw new InvalidOperationException("Invalid movement restoration target.");
         if (!reader.HasExited && j.ProcessId == reader.ProcessId && j.StartTicks == reader.StartTicks &&
             reader.MatchesCameraPawn(j.EntityHandle, j.Pawn))
         {
+            if (j.Build != reader.Build) throw new InvalidOperationException("Movement journal build does not match CS2.");
             var state = reader.Capture();
             int health = reader.Read<int>(j.Address);
             if (MovementExperimentPolicy.ShouldRestore(health, completed,

@@ -1,6 +1,7 @@
 @echo off
 setlocal
-echo Camera recovery + automatic LOCAL HP=10000 + F6/F7. Revision 2026-09-29-auto-hp.
+echo CameraProbe. Revision 2026-10-02-build-14188.
+echo Engine version is detected automatically. Verified player profiles: 14186 and 14188.
 echo F6: apply image commands, switch teams, then reapply and verify image commands.
 echo Enable the developer console on the standard tilde key. No cfg is needed.
 echo F7: record camera. F8: cancel recording.

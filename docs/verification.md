@@ -104,3 +104,11 @@ Requested by the user. Main play now runs camera and movement workers with separ
 Transient observations after a completed write end the current hold and restore before waiting again. The final catch covers `!attempted || completed`; uncertain partial writes and cleanup failures remain fatal. Review identified this transition issue and it was repaired before final packaging.
 
 55/55 tests passed; both Release packages published. The main package is staged with ready.sha256. Installation was attempted but blocked by the running old DLL; Ctrl+C and launcher restart are required. Server movement outcome remains unverified; no live health write was performed by the assistant.
+
+## Build 14188 compatibility — 2026-10-02
+
+- `steam.inf` reports patch 1.41.8.8, SourceRevision 11064488; live signature discovery reports engine build 14188.
+- A fresh local cs2-dumper 0.1.3 run produced the 14188 schema and global offsets. All fields used by CameraProbe match the 14186 field layout; changed globals are isolated in the new build profile.
+- The ConVar interface remains at tier0.dll RVA 3851888. A live read-only registry traversal found unique `mat_fullbright` and `spec_freeze_time` entries with the expected types, values and restriction flags.
+- Read-only inspection found the camera validation blocks at client.dll RVAs 0x8827BC, 0x8827E7 and 0x88280C, and the health comparison at RVA 0x8C4ADE. Exact bytes were verified against the loaded module through the restore-only commands before publication.
+- Live `snapshot` completed with engine build 14188 and no camera warnings. The full C# suite passed 58/58 before publication.

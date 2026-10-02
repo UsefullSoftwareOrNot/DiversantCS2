@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Reflection.PortableExecutable;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Win32.SafeHandles;
@@ -35,25 +36,49 @@ internal sealed class GameReader : IDisposable
         {
             handle = Native.OpenProcess(0x0010 | 0x1000, false, process.Id); // READ + QUERY_LIMITED_INFORMATION
             if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot open CS2 for reading");
-            if (!conVarsOnly)
-            {
-                schema = JsonDocument.Parse(File.ReadAllText(Path.Combine(referenceDirectory, "client_dll.json")));
-                offsets = JsonDocument.Parse(File.ReadAllText(Path.Combine(referenceDirectory, "offsets.json")));
-                client = Module("client.dll").Address;
-            }
-            var engine = Module("engine2.dll");
-            int buildOffset = conVarsOnly ? ConVarLayout.BuildNumberOffset : Offset("engine2.dll", "dwBuildNumber");
-            if (buildOffset < 0 || buildOffset > engine.Size - 4)
-                throw new InvalidOperationException("Build offset is outside engine2.dll.");
-            build = Read<int>(engine.Address + (ulong)buildOffset);
+            build = DiscoverEngineBuild();
             if (conVarsOnly) _ = ConVarLayout.ForBuild(build);
             else
             {
-                using var info = JsonDocument.Parse(File.ReadAllText(Path.Combine(referenceDirectory, "info.json")));
+                string profile = ReferenceProfile.Resolve(referenceDirectory, build);
+                schema = JsonDocument.Parse(File.ReadAllText(Path.Combine(profile, "client_dll.json")));
+                offsets = JsonDocument.Parse(File.ReadAllText(Path.Combine(profile, "offsets.json")));
+                client = Module("client.dll").Address;
+                using var info = JsonDocument.Parse(File.ReadAllText(Path.Combine(profile, "info.json")));
                 Validation.Build(info.RootElement.GetProperty("build_number").GetInt32(), build);
             }
         }
         catch { Dispose(); throw; }
+    }
+
+    private int DiscoverEngineBuild()
+    {
+        ProcessModule engine = process.Modules.Cast<ProcessModule>().Single(m =>
+            m.ModuleName.Equals("engine2.dll", StringComparison.OrdinalIgnoreCase));
+        ulong address = (ulong)engine.BaseAddress;
+        using var stream = File.Open(engine.FileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var pe = new PEReader(stream);
+        var headers = pe.PEHeaders;
+        if (headers.PEHeader?.Magic != PEMagic.PE32Plus || headers.PEHeader.SizeOfImage != engine.ModuleMemorySize)
+            throw new InvalidOperationException("Loaded engine image does not match its PE file.");
+        int peOffset = Read<int>(address + 0x3C);
+        if (peOffset < 64 || peOffset > engine.ModuleMemorySize - 24 || Read<ushort>(address) != 0x5A4D ||
+            Read<uint>(address + (ulong)peOffset) != 0x4550 ||
+            Read<int>(address + (ulong)peOffset + 8) != headers.CoffHeader.TimeDateStamp)
+            throw new InvalidOperationException("Engine file changed since it was loaded. Restart CS2 before compatibility discovery.");
+        var sections = new List<(int Rva, byte[] Code)>();
+        foreach (var section in headers.SectionHeaders)
+        {
+            if ((section.SectionCharacteristics & SectionCharacteristics.MemExecute) == 0) continue;
+            if (section.VirtualAddress < 0 || section.VirtualSize <= 0 ||
+                (long)section.VirtualAddress + section.VirtualSize > engine.ModuleMemorySize)
+                throw new InvalidOperationException("Invalid executable engine section.");
+            sections.Add((section.VirtualAddress, Bytes(address + (ulong)section.VirtualAddress, section.VirtualSize)));
+        }
+        int offset = EngineBuildLocator.FindOffset(sections, engine.ModuleMemorySize);
+        int value = Read<int>(address + (ulong)offset);
+        if (value <= 0) throw new InvalidOperationException("Discovered engine build value is invalid; memory writes are disabled.");
+        return value;
     }
 
     internal (ulong Address, int Size) Module(string name)
@@ -233,11 +258,12 @@ internal sealed class GameReader : IDisposable
     internal void VerifyMovementExperimentCode()
     {
         VerifyCameraExperimentCode();
+        var layout = PlayerCodeLayout.ForBuild(build);
         // Explicit health comparison in this build: cmp dword ptr [rax+0x34c],r15d.
-        byte[] expected = Convert.FromHexString("4439B84C0300007F1E");
+        byte[] expected = Convert.FromHexString(layout.MovementHealthHex);
         if (Field("C_BaseEntity", "m_iHealth") != 844 ||
-            !Bytes(client + 0x8C529E, expected.Length).SequenceEqual(expected))
-            throw new InvalidOperationException("Movement health-check bytes do not match inspected build 14186.");
+            !Bytes(client + layout.MovementHealthRva, expected.Length).SequenceEqual(expected))
+            throw new InvalidOperationException($"Movement health-check bytes do not match inspected build {build}.");
     }
 
     internal bool MatchesCameraPawn(uint entityHandle, ulong pawn)
@@ -261,10 +287,11 @@ internal sealed class GameReader : IDisposable
             byte[] expected = Convert.FromHexString(hex);
             return Bytes(client + rva, expected.Length).SequenceEqual(expected);
         }
-        if (build != 14186 || Field("C_BasePlayerPawn", "m_flDeathTime") != 5208 ||
-            !Matches(0x882F7C, "488B4F38488B01FF90E804000084C0756D") ||
-            !Matches(0x882FA7, "F30F108058140000") ||
-            !Matches(0x882FCC, "E89F8E8DFF0F2F058488380176204D8BCF4D8BC6488BD6488BCFE8D5F2FFFF"))
+        var layout = PlayerCodeLayout.ForBuild(build);
+        if (Field("C_BasePlayerPawn", "m_flDeathTime") != 5208 ||
+            !Matches(layout.CameraEntryRva, layout.CameraEntryHex) ||
+            !Matches(layout.CameraDeathLoadRva, layout.CameraDeathLoadHex) ||
+            !Matches(layout.CameraCompareRva, layout.CameraCompareHex))
             throw new InvalidOperationException("Camera code does not match the inspected build; experiment refused.");
     }
 

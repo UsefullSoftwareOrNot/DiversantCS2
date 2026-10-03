@@ -131,6 +131,14 @@ var tests = new (string Name, Action Run)[]
         Reject(() => ImageCommands.RoundTrip(() => applications++, () => throw new InvalidOperationException(), () => { }));
         if (applications != 1) throw new Exception("Continued after failed team switch");
     }),
+    ("image recovery still applies when team switching is unavailable", () =>
+    {
+        int applications = 0, switches = 0;
+        bool switched = ImageCommands.RecoverOrRoundTrip(() => applications++, () => false,
+            () => switches++, () => throw new Exception("Validated a skipped switch"));
+        if (switched || applications != 1 || switches != 0)
+            throw new Exception("Image-only recovery did not stop after applying values");
+    }),
     ("camera experiment rejects ordinary alive and dead players", () =>
     {
         var s = new Snapshot { Team = 2, Health = 100, LifeState = 2, PawnIsAlive = false,
@@ -225,19 +233,37 @@ var tests = new (string Name, Action Run)[]
         Reject(() => PlayerCodeLayout.ForBuild(14187));
         Reject(() => PlayerCodeLayout.ForBuild(14189));
     }),
-    ("player schema selection keeps legacy root and uses a build directory when present", () =>
+    ("player schema selection separates hotfixes that share an engine build", () =>
     {
         string root = Path.Combine(Path.GetTempPath(), $"camera-probe-{Guid.NewGuid():N}");
+        const string legacyHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const string oldHotfixHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        const string newHotfixHash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        void Profile(string directory, int build, string? hash)
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, "info.json"), $"{{\"build_number\":{build}}}");
+            File.WriteAllText(Path.Combine(directory, "provenance.json"), hash is null
+                ? "{\"kind\":\"local-read-only-dump\"}"
+                : $"{{\"client_sha256\":\"{hash}\"}}");
+            File.WriteAllText(Path.Combine(directory, "client_dll.json"), "{}");
+            File.WriteAllText(Path.Combine(directory, "offsets.json"), "{}");
+        }
         try
         {
-            Directory.CreateDirectory(root);
-            File.WriteAllText(Path.Combine(root, "info.json"), "{\"build_number\":14186}");
-            string current = Path.Combine(root, "builds", "14188");
-            Directory.CreateDirectory(current);
-            File.WriteAllText(Path.Combine(current, "info.json"), "{\"build_number\":14188}");
-            if (ReferenceProfile.Resolve(root, 14186) != root) throw new Exception("Legacy schema was not selected");
-            if (ReferenceProfile.Resolve(root, 14188) != current) throw new Exception("Build schema was not selected");
-            Reject(() => ReferenceProfile.Resolve(root, 14189));
+            Profile(root, 14186, null); // Real 14186 metadata predates client hashing.
+            string oldHotfix = Path.Combine(root, "builds", "14188", oldHotfixHash);
+            string newHotfix = Path.Combine(root, "builds", "14188", newHotfixHash);
+            Profile(oldHotfix, 14188, oldHotfixHash);
+            Profile(newHotfix, 14188, newHotfixHash);
+            if (ReferenceProfile.Resolve(root, 14186, legacyHash.ToUpperInvariant()) != root)
+                throw new Exception("Legacy schema was not selected by hash");
+            if (ReferenceProfile.Resolve(root, 14188, oldHotfixHash) != oldHotfix)
+                throw new Exception("First hotfix schema was not selected");
+            if (ReferenceProfile.Resolve(root, 14188, newHotfixHash) != newHotfix)
+                throw new Exception("Second hotfix schema was not selected");
+            Reject(() => ReferenceProfile.Resolve(root, 14188, legacyHash));
+            Reject(() => ReferenceProfile.Resolve(root, 14189, newHotfixHash));
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }),
@@ -271,6 +297,14 @@ var tests = new (string Name, Action Run)[]
     {
         var taps = new List<ushort>();
         SwitchSequence.Execute(() => State(), () => true, () => { }, taps.Add, (_, guard) => guard(), (_, _) => { }, 75);
+        Equal([2, 3], taps.ToArray());
+    }),
+    ("sequence returns to the original team from a transient spectator state", () =>
+    {
+        int captures = 0;
+        var taps = new List<ushort>();
+        SwitchSequence.Execute(() => { var s = State(); if (++captures == 2) s.Team = 0; return s; },
+            () => true, () => { }, taps.Add, (_, guard) => guard(), (_, _) => { }, 75);
         Equal([2, 3], taps.ToArray());
     }),
     ("fresh state blocks first input after freeze ends", () =>

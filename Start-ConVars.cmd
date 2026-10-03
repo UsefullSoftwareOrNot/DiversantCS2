@@ -1,8 +1,9 @@
 @echo off
 setlocal
-echo CameraProbe. Revision 2026-10-02-build-14188.
-echo Engine version is detected automatically. Verified player profiles: 14186 and 14188.
-echo F6: apply image commands, switch teams, then reapply and verify image commands.
+echo CameraProbe. Revision 2026-10-04-hotfix-fingerprint.
+echo Engine version and client.dll fingerprint are detected automatically.
+echo Verified player profiles: 14186 and both known 14188 revisions.
+echo F6: always recover image commands; switch teams only when T/CT freeze time is available.
 echo Enable the developer console on the standard tilde key. No cfg is needed.
 echo F7: record camera. F8: cancel recording.
 echo Keep this window open. Ctrl+C restores owned local HP, camera timestamp and ConVar flags.

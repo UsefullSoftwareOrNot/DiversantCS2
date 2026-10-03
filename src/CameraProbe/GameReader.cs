@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Reflection.PortableExecutable;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Win32.SafeHandles;
@@ -40,10 +41,13 @@ internal sealed class GameReader : IDisposable
             if (conVarsOnly) _ = ConVarLayout.ForBuild(build);
             else
             {
-                string profile = ReferenceProfile.Resolve(referenceDirectory, build);
+                ProcessModule clientModule = process.Modules.Cast<ProcessModule>().Single(m =>
+                    m.ModuleName.Equals("client.dll", StringComparison.OrdinalIgnoreCase));
+                string clientHash = DiscoverClientHash(clientModule);
+                string profile = ReferenceProfile.Resolve(referenceDirectory, build, clientHash);
                 schema = JsonDocument.Parse(File.ReadAllText(Path.Combine(profile, "client_dll.json")));
                 offsets = JsonDocument.Parse(File.ReadAllText(Path.Combine(profile, "offsets.json")));
-                client = Module("client.dll").Address;
+                client = (ulong)clientModule.BaseAddress;
                 using var info = JsonDocument.Parse(File.ReadAllText(Path.Combine(profile, "info.json")));
                 Validation.Build(info.RootElement.GetProperty("build_number").GetInt32(), build);
             }
@@ -79,6 +83,29 @@ internal sealed class GameReader : IDisposable
         int value = Read<int>(address + (ulong)offset);
         if (value <= 0) throw new InvalidOperationException("Discovered engine build value is invalid; memory writes are disabled.");
         return value;
+    }
+
+    private string DiscoverClientHash(ProcessModule module)
+    {
+        ulong address = (ulong)module.BaseAddress;
+        using var stream = File.Open(module.FileName, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        int fileTimestamp, fileImageSize;
+        using (var pe = new PEReader(stream, PEStreamOptions.LeaveOpen))
+        {
+            var headers = pe.PEHeaders;
+            if (headers.PEHeader?.Magic != PEMagic.PE32Plus)
+                throw new InvalidOperationException("Loaded client image is not a 64-bit PE file.");
+            fileTimestamp = headers.CoffHeader.TimeDateStamp;
+            fileImageSize = headers.PEHeader.SizeOfImage;
+        }
+        int peOffset = Read<int>(address + 0x3C);
+        if (fileImageSize != module.ModuleMemorySize || peOffset < 64 || peOffset > module.ModuleMemorySize - 24 ||
+            Read<ushort>(address) != 0x5A4D || Read<uint>(address + (ulong)peOffset) != 0x4550 ||
+            Read<int>(address + (ulong)peOffset + 8) != fileTimestamp)
+            throw new InvalidOperationException("Client file changed since it was loaded. Restart CS2 before compatibility discovery.");
+        stream.Position = 0;
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
 
     internal (ulong Address, int Size) Module(string name)

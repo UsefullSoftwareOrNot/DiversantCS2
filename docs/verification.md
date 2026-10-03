@@ -112,3 +112,9 @@ Transient observations after a completed write end the current hold and restore 
 - The ConVar interface remains at tier0.dll RVA 3851888. A live read-only registry traversal found unique `mat_fullbright` and `spec_freeze_time` entries with the expected types, values and restriction flags.
 - Read-only inspection found the camera validation blocks at client.dll RVAs 0x8827BC, 0x8827E7 and 0x88280C, and the health comparison at RVA 0x8C4ADE. Exact bytes were verified against the loaded module through the restore-only commands before publication.
 - Live `snapshot` completed with engine build 14188 and no camera warnings. The full C# suite passed 58/58 before publication.
+
+## Build 14188 hotfix fingerprint — 2026-10-04
+
+- Valve kept engine build 14188 but changed SourceRevision from 11064488 to 11076591 and replaced client.dll. The previous build-only profile read four stale global offsets, producing team 0 and an invalid entity pointer.
+- Build 14188 player profiles are now selected by both engine build and the verified client.dll SHA-256. Unknown same-build hotfixes are rejected instead of reusing stale offsets. The archived 14186 metadata predates client hashing and retains its explicit build-only fallback.
+- The new dump changes `dwCSGOInput`, `dwEntityList`, `dwGameEntitySystem`, and `dwViewAngles` by 16 bytes. Schema fields and the inspected camera/movement instruction blocks remain unchanged.

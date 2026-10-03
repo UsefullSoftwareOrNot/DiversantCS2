@@ -31,4 +31,11 @@ public static class SwitchPolicy
         if (delay is < 30 or > 1000) throw new InvalidOperationException("Delay must be 30..1000 ms.");
         return team == 3 ? [2, 3] : [3, 2];
     }
+
+    public static void Transition(int originalTeam, int currentTeam, bool freeze, bool foreground, int delay)
+    {
+        _ = Teams(originalTeam, freeze, foreground, delay);
+        if (currentTeam is not (0 or 2 or 3))
+            throw new InvalidOperationException("Unexpected team state during the switch.");
+    }
 }

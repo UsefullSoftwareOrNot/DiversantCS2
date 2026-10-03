@@ -6,10 +6,20 @@ internal static class ImageCommands
 
     internal static void RoundTrip(Action apply, Action switchTeams, Action validateAfter)
     {
+        _ = RecoverOrRoundTrip(apply, () => true, switchTeams, validateAfter);
+    }
+
+    internal static bool RecoverOrRoundTrip(Action apply, Func<bool> canSwitch,
+        Action switchTeams, Action validateAfter)
+    {
         apply();
+        if (!canSwitch()) return false;
         switchTeams();
-        validateAfter();
+        // A team transition may reset rendering values. Restore them before the final
+        // state check so an unconfirmed return does not leave the scene black.
         apply();
+        validateAfter();
+        return true;
     }
 
     internal static void Apply(Action<string> send, Func<(int Fullbright, float Freeze)> read, Action<int> wait)

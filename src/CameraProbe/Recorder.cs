@@ -48,8 +48,6 @@ internal static class Recorder
     {
         CheckCancellation(stop);
         Snapshot initial = switchTeams ? reader.CaptureSwitchState() : reader.Capture();
-        if (switchTeams)
-            _ = SwitchPolicy.Teams(initial.Team ?? 0, initial.FreezeTime == true, Native.IsForeground(reader.ProcessId), delay);
         string directory = Path.Combine(AppContext.BaseDirectory, "captures");
         Directory.CreateDirectory(directory);
         string path = Path.Combine(directory, $"camera-{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid():N}.jsonl");
@@ -86,18 +84,34 @@ internal static class Recorder
                         Log("image-commands-verified", new { spec_freeze_time = 1000, mat_fullbright = 1 });
                         Console.WriteLine("F6: spec_freeze_time=1000, mat_fullbright=1 — значения проверены.");
                     }
-                    void CheckBeforeSubmit()
+                    void CheckDuringSequence()
                     {
                         var current = reader.CaptureSwitchState();
                         CheckCancellation(stop);
                         if (current.RoundStartCount != initial.RoundStartCount) throw new InvalidOperationException("Раунд сменился во время настройки консоли.");
-                        _ = SwitchPolicy.Teams(current.Team ?? 0, current.FreezeTime == true, Native.IsForeground(reader.ProcessId), delay);
+                        SwitchPolicy.Transition(initial.Team ?? 0, current.Team ?? -1,
+                            current.FreezeTime == true, Native.IsForeground(reader.ProcessId), delay);
                     }
-                    ImageCommands.RoundTrip(ApplyImages, () =>
+                    bool CanSwitch()
                     {
-                        CheckBeforeSubmit();
+                        var current = reader.CaptureSwitchState();
+                        CheckCancellation(stop);
+                        if (current.RoundStartCount != initial.RoundStartCount)
+                            throw new InvalidOperationException("Раунд сменился во время настройки консоли.");
+                        if (current.Team is not (2 or 3) || current.FreezeTime != true)
+                        {
+                            Log("team-switch-skipped", new { reason = "image-recovery-only", current.Team, current.FreezeTime });
+                            Console.WriteLine("F6: изображение применено; смена команд недоступна в текущем состоянии.");
+                            return false;
+                        }
+                        _ = SwitchPolicy.Teams(current.Team.Value, true, Native.IsForeground(reader.ProcessId), delay);
+                        return true;
+                    }
+                    bool switched = ImageCommands.RecoverOrRoundTrip(ApplyImages, CanSwitch, () =>
+                    {
+                        CheckDuringSequence();
                         SwitchSequence.Execute(reader.CaptureSwitchState, () => Native.IsForeground(reader.ProcessId),
-                            () => CheckCancellation(stop), team => channel.Join(team, CheckBeforeSubmit),
+                            () => CheckCancellation(stop), team => channel.Join(team, CheckDuringSequence),
                             (milliseconds, guard) =>
                             {
                                 long returnAt = clock.ElapsedMilliseconds + milliseconds;
@@ -113,7 +127,8 @@ internal static class Recorder
                             throw new InvalidOperationException("Возврат в исходную команду не подтверждён; повторное применение остановлено.");
                         Log("after-team-switch", after);
                     });
-                    Log("image-commands-after-switch-verified", new { spec_freeze_time = 1000, mat_fullbright = 1 });
+                    Log(switched ? "image-commands-after-switch-verified" : "image-commands-recovery-verified",
+                        new { spec_freeze_time = 1000, mat_fullbright = 1 });
                 }
                 finally
                 {

@@ -38,7 +38,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run.ps1 -EnableSwitchi
 
 | Key | Action |
 | --- | --- |
-| F6 | Apply and verify image commands, send a team switch and return, then reapply image commands. Available during freeze time only. |
+| F6 | Always apply and verify image commands. During T/CT freeze time, also switch teams and return, then reapply the image commands. |
 | F7 | Record camera state for 8 seconds. |
 | F8 | Cancel the current recording or switching sequence. |
 | Ctrl+C in the program window | Exit and restore recorded changes. |

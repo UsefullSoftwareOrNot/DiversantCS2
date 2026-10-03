@@ -28,7 +28,8 @@ internal static class SwitchSequence
             cancel(); // Capture consists of several reads: cancellation may have happened during them.
             if (between.RoundStartCount != first.RoundStartCount)
                 throw new InvalidOperationException("Round changed; return input cancelled.");
-            _ = SwitchPolicy.Teams(between.Team ?? 0, between.FreezeTime == true, foreground(), delay);
+            SwitchPolicy.Transition(first.Team ?? 0, between.Team ?? -1,
+                between.FreezeTime == true, foreground(), delay);
             tap(keys[1]);
         }
         finally

@@ -388,6 +388,61 @@ var tests = new (string Name, Action Run)[]
         }
         finally { Directory.Delete(root, true); }
     }),
+    ("compatibility context extracts required positions equally from reviewed and automatic profiles", () =>
+    {
+        string root = TempDirectory(); const int build = 16000; string hash = new('5', 64);
+        try
+        {
+            string reviewedPath = Path.Combine(root, "reviewed"), automaticPath = Path.Combine(root, "automatic");
+            WriteDiscoveryProfile(reviewedPath, build, hash, conVarOffset: 123456);
+            WriteDiscoveryProfile(automaticPath, build, hash, conVarOffset: 123456);
+            var reviewed = CompatibilityContext.Load(new(reviewedPath, ProfileSource.Reviewed), build, hash,
+                0x2800000, CodeFixture());
+            var automatic = CompatibilityContext.Load(new(automaticPath, ProfileSource.Automatic), build, hash,
+                0x2800000, CodeFixture());
+            if (reviewed.Global("dwLocalPlayerController") != 4096 ||
+                reviewed.Field("C_BaseEntity", "m_iHealth") != 844 ||
+                reviewed.ConVarInterfaceRva != 123456 || reviewed.CodeLayout.CameraEntryRva != 0x8827BC ||
+                reviewed.CodeLayoutFingerprint.Length != 64)
+                throw new Exception("Compatibility values were extracted incorrectly");
+            reviewed.RequireEquivalent(automatic);
+        }
+        finally { Directory.Delete(root, true); }
+    }),
+    ("compatibility context rejects globals outside the client image", () =>
+    {
+        string root = TempDirectory(); const int build = 16001; string hash = new('6', 64);
+        try
+        {
+            string negative = Path.Combine(root, "negative"), beyond = Path.Combine(root, "beyond");
+            WriteDiscoveryProfile(negative, build, hash, globalOffset: -1);
+            WriteDiscoveryProfile(beyond, build, hash, globalOffset: 0x2800000);
+            Reject(() => CompatibilityContext.Load(new(negative, ProfileSource.Reviewed), build, hash,
+                0x2800000, CodeFixture()));
+            Reject(() => CompatibilityContext.Load(new(beyond, ProfileSource.Reviewed), build, hash,
+                0x2800000, CodeFixture()));
+        }
+        finally { Directory.Delete(root, true); }
+    }),
+    ("compatibility identity rejects a changed client or code layout", () =>
+    {
+        string root = TempDirectory(); const int build = 16002; string hash = new('7', 64);
+        try
+        {
+            string firstPath = Path.Combine(root, "first"), secondPath = Path.Combine(root, "second");
+            WriteDiscoveryProfile(firstPath, build, hash);
+            WriteDiscoveryProfile(secondPath, build, new string('8', 64));
+            var first = CompatibilityContext.Load(new(firstPath, ProfileSource.Reviewed), build, hash,
+                0x2800000, CodeFixture());
+            var changedClient = CompatibilityContext.Load(new(secondPath, ProfileSource.Reviewed), build,
+                new string('8', 64), 0x2800000, CodeFixture());
+            Reject(() => first.RequireEquivalent(changedClient));
+            var changedCode = CompatibilityContext.Load(new(firstPath, ProfileSource.Reviewed), build, hash,
+                0x2800000, CodeFixture(compareCallLow: 0x30));
+            Reject(() => first.RequireEquivalent(changedCode));
+        }
+        finally { Directory.Delete(root, true); }
+    }),
     ("new ConVar build does not enable old player schema", () => Reject(() => Validation.Build(14185, 14186))),
     ("camera read failure preserves valid team switch state", () =>
     {
@@ -566,13 +621,15 @@ static void Cancelled(Action action)
     throw new Exception("Expected cancellation");
 }
 
-static (int Rva, byte[] Code)[] CodeFixture(bool duplicateMovement = false, bool outOfRangeCall = false)
+static (int Rva, byte[] Code)[] CodeFixture(bool duplicateMovement = false, bool outOfRangeCall = false,
+    byte compareCallLow = 0x2F)
 {
     const int cameraRva = 0x882700, movementRva = 0x8C4A00;
     byte[] camera = new byte[0x200], movement = new byte[0x200];
     Convert.FromHexString("488B4F38488B01FF90E804000084C0756D").CopyTo(camera, 0xBC);
     Convert.FromHexString("F30F108058140000").CopyTo(camera, 0xE7);
     byte[] compare = Convert.FromHexString("E82F9B8DFF0F2F05D4B2380176204D8BCF4D8BC6488BD6488BCFE8D5F2FFFF");
+    compare[1] = compareCallLow;
     if (outOfRangeCall) BitConverter.GetBytes(int.MaxValue).CopyTo(compare, 1);
     compare.CopyTo(camera, 0x10C);
     byte[] health = Convert.FromHexString("4439B84C0300007F1E");
@@ -588,15 +645,44 @@ static string TempDirectory()
     return path;
 }
 
-static void WriteDiscoveryProfile(string directory, int build, string? clientHash = null, int globalOffset = 4096)
+static void WriteDiscoveryProfile(string directory, int build, string? clientHash = null, int globalOffset = 4096,
+    int conVarOffset = 3851888)
 {
     Directory.CreateDirectory(directory);
     File.WriteAllText(Path.Combine(directory, "info.json"), $"{{\"build_number\":{build}}}");
     File.WriteAllText(Path.Combine(directory, "offsets.json"),
         $"{{\"client.dll\":{{\"dwLocalPlayerController\":{globalOffset},\"dwGameRules\":8192,\"dwGameEntitySystem\":12288,\"dwViewMatrix\":16384,\"dwViewAngles\":20480}}}}");
-    File.WriteAllText(Path.Combine(directory, "interfaces.json"), "{\"tier0.dll\":{\"VEngineCvar007\":3851888}}");
+    File.WriteAllText(Path.Combine(directory, "interfaces.json"),
+        $"{{\"tier0.dll\":{{\"VEngineCvar007\":{conVarOffset}}}}}");
+    var fields = new Dictionary<string, Dictionary<string, int>>
+    {
+        ["CEntityInstance"] = new() { ["m_pEntity"] = 16 },
+        ["CEntityIdentity"] = new() { ["m_designerName"] = 32 },
+        ["CBasePlayerController"] = new() { ["m_bIsLocalPlayerController"] = 1712, ["m_hPawn"] = 1716 },
+        ["CCSPlayerController"] = new() { ["m_hPlayerPawn"] = 2044, ["m_hObserverPawn"] = 2052, ["m_bPawnIsAlive"] = 2072 },
+        ["C_BaseEntity"] = new() { ["m_iTeamNum"] = 1003, ["m_pGameSceneNode"] = 816, ["m_fFlags"] = 916,
+            ["m_hGroundEntity"] = 1012, ["m_MoveType"] = 535, ["m_vecAbsVelocity"] = 976,
+            ["m_vecServerVelocity"] = 1016, ["m_iHealth"] = 844, ["m_lifeState"] = 848 },
+        ["CGameSceneNode"] = new() { ["m_vecAbsOrigin"] = 208 },
+        ["C_BasePlayerPawn"] = new() { ["m_pMovementServices"] = 4912, ["m_flDeathTime"] = 5208,
+            ["m_hController"] = 5132, ["v_angle"] = 5392, ["m_vecLastCameraSetupLocalOrigin"] = 5504,
+            ["m_flLastCameraSetupTime"] = 5516, ["m_pCameraServices"] = 4928, ["m_pObserverServices"] = 4944 },
+        ["CPlayer_MovementServices"] = new() { ["m_nButtons"] = 80, ["m_nLastCommandNumberProcessed"] = 140,
+            ["m_flCmdForwardMove"] = 156 },
+        ["CCSPlayer_MovementServices"] = new() { ["m_ModernJump"] = 1736, ["m_nLastJumpTick"] = 1728 },
+        ["CCSPlayerModernJump"] = new() { ["m_nLastActualJumpPressTick"] = 24,
+            ["m_nLastUsableJumpPressTick"] = 28, ["m_nLastLandedTick"] = 32 },
+        ["C_CSGameRules"] = new() { ["m_bFreezePeriod"] = 56, ["m_nRoundStartCount"] = 132 },
+        ["CPlayer_CameraServices"] = new() { ["m_hViewEntity"] = 80 },
+        ["CPlayer_ObserverServices"] = new() { ["m_iObserverMode"] = 64, ["m_hObserverTarget"] = 68,
+            ["m_bForcedObserverMode"] = 76, ["m_iObserverLastMode"] = 80 }
+    };
+    var classes = fields.ToDictionary(pair => pair.Key, pair => new { fields = pair.Value });
     File.WriteAllText(Path.Combine(directory, "client_dll.json"),
-        "{\"client.dll\":{\"classes\":{\"C_BaseEntity\":{\"fields\":{\"m_iHealth\":844}},\"C_BasePlayerPawn\":{\"fields\":{\"m_flDeathTime\":5208}}}}}");
+        System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["client.dll"] = new { classes }
+        }));
     if (clientHash is not null)
         File.WriteAllText(Path.Combine(directory, "provenance.json"),
             $"{{\"kind\":\"automatic-local-discovery\",\"engine_build\":{build},\"client_sha256\":\"{clientHash}\"}}");

@@ -10,7 +10,7 @@ internal static class ConVarReader
     // Linked-list layout; differs from the older CCvar+0x40 pointer array.
     internal static ConVarEntry[] Find(GameReader reader)
     {
-        ulong offset = ConVarLayout.ForBuild(reader.Build).InterfaceOffset;
+        ulong offset = reader.ConVarInterfaceOffset;
         var tier0 = reader.Module("tier0.dll");
         if (offset + 0x80 > (ulong)tier0.Size) throw new InvalidOperationException("Cvar interface is outside tier0.dll.");
         ulong address = tier0.Address + offset;

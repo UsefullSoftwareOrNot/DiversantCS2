@@ -4,7 +4,6 @@ using System.Runtime.InteropServices;
 using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using Microsoft.Win32.SafeHandles;
 
 namespace CameraProbe;
@@ -13,8 +12,7 @@ internal sealed class GameReader : IDisposable
 {
     private readonly Process process;
     private readonly SafeProcessHandle handle = null!;
-    private readonly JsonDocument schema = null!;
-    private readonly JsonDocument offsets = null!;
+    private readonly CompatibilityContext context = null!;
     private readonly ulong client;
     private readonly int build;
     private readonly bool conVarsOnly;
@@ -22,6 +20,10 @@ internal sealed class GameReader : IDisposable
     internal long StartTicks => process.StartTime.ToUniversalTime().Ticks;
     internal bool HasExited => process.HasExited;
     internal int Build => build;
+    internal string ClientSha256 => context.ClientSha256;
+    internal string CodeLayoutFingerprint => context.CodeLayoutFingerprint;
+    internal ulong ConVarInterfaceOffset => context.ConVarInterfaceRva;
+    internal ProfileSource ProfileSource => context.Source;
 
     internal GameReader(string referenceDirectory, bool conVarsOnly = false)
     {
@@ -38,21 +40,33 @@ internal sealed class GameReader : IDisposable
             handle = Native.OpenProcess(0x0010 | 0x1000, false, process.Id); // READ + QUERY_LIMITED_INFORMATION
             if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot open CS2 for reading");
             build = DiscoverEngineBuild();
-            if (conVarsOnly) _ = ConVarLayout.ForBuild(build);
-            else
-            {
-                ProcessModule clientModule = process.Modules.Cast<ProcessModule>().Single(m =>
-                    m.ModuleName.Equals("client.dll", StringComparison.OrdinalIgnoreCase));
-                string clientHash = DiscoverClientHash(clientModule);
-                string profile = ReferenceProfile.Resolve(referenceDirectory, build, clientHash);
-                schema = JsonDocument.Parse(File.ReadAllText(Path.Combine(profile, "client_dll.json")));
-                offsets = JsonDocument.Parse(File.ReadAllText(Path.Combine(profile, "offsets.json")));
-                client = (ulong)clientModule.BaseAddress;
-                using var info = JsonDocument.Parse(File.ReadAllText(Path.Combine(profile, "info.json")));
-                Validation.Build(info.RootElement.GetProperty("build_number").GetInt32(), build);
-            }
+            ProcessModule clientModule = process.Modules.Cast<ProcessModule>().Single(m =>
+                m.ModuleName.Equals("client.dll", StringComparison.OrdinalIgnoreCase));
+            string clientHash = DiscoverClientHash(clientModule);
+            client = (ulong)clientModule.BaseAddress;
+            string baseDirectory = Directory.GetParent(Path.GetFullPath(referenceDirectory))?.FullName ??
+                throw new InvalidOperationException("Reference directory has no application parent.");
+            var profile = ReferenceProfile.ResolveOrDiscover(referenceDirectory,
+                Path.Combine(baseDirectory, "captures", "discovery", "profiles"),
+                Path.Combine(baseDirectory, "tools", "cs2-dumper.exe"), build, clientHash,
+                () => CompatibilityIdentityUnchanged(clientModule, clientHash), DumperRunner.Run);
+            context = CompatibilityContext.Load(profile, build, clientHash, clientModule.ModuleMemorySize,
+                DiscoverExecutableSections(clientModule));
         }
         catch { Dispose(); throw; }
+    }
+
+    private bool CompatibilityIdentityUnchanged(ProcessModule originalModule, string clientHash)
+    {
+        try
+        {
+            if (process.HasExited || process.StartTime.ToUniversalTime().Ticks != StartTicks) return false;
+            ProcessModule current = process.Modules.Cast<ProcessModule>().Single(m =>
+                m.ModuleName.Equals("client.dll", StringComparison.OrdinalIgnoreCase));
+            return current.BaseAddress == originalModule.BaseAddress && current.ModuleMemorySize == originalModule.ModuleMemorySize &&
+                DiscoverClientHash(current).Equals(clientHash, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or IOException) { return false; }
     }
 
     private int DiscoverEngineBuild()
@@ -108,6 +122,32 @@ internal sealed class GameReader : IDisposable
         return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
 
+    private (int Rva, byte[] Code)[] DiscoverExecutableSections(ProcessModule module)
+    {
+        ulong address = (ulong)module.BaseAddress;
+        using var stream = File.Open(module.FileName, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var pe = new PEReader(stream);
+        var headers = pe.PEHeaders;
+        if (headers.PEHeader?.Magic != PEMagic.PE32Plus || headers.PEHeader.SizeOfImage != module.ModuleMemorySize)
+            throw new InvalidOperationException("Loaded client image does not match its PE file.");
+        int peOffset = Read<int>(address + 0x3C);
+        if (peOffset < 64 || peOffset > module.ModuleMemorySize - 24 || Read<ushort>(address) != 0x5A4D ||
+            Read<uint>(address + (ulong)peOffset) != 0x4550 ||
+            Read<int>(address + (ulong)peOffset + 8) != headers.CoffHeader.TimeDateStamp)
+            throw new InvalidOperationException("Client file changed before code discovery. Restart CS2.");
+        var sections = new List<(int Rva, byte[] Code)>();
+        foreach (var section in headers.SectionHeaders)
+        {
+            if ((section.SectionCharacteristics & SectionCharacteristics.MemExecute) == 0) continue;
+            if (section.VirtualAddress < 0 || section.VirtualSize <= 0 ||
+                (long)section.VirtualAddress + section.VirtualSize > module.ModuleMemorySize)
+                throw new InvalidOperationException("Invalid executable client section.");
+            sections.Add((section.VirtualAddress, Bytes(address + (ulong)section.VirtualAddress, section.VirtualSize)));
+        }
+        return sections.ToArray();
+    }
+
     internal (ulong Address, int Size) Module(string name)
     {
         foreach (ProcessModule module in process.Modules)
@@ -116,9 +156,12 @@ internal sealed class GameReader : IDisposable
         throw new InvalidOperationException($"{name} is not loaded.");
     }
 
-    private int Offset(string module, string name) => offsets.RootElement.GetProperty(module).GetProperty(name).GetInt32();
-    private int Field(string type, string field) => schema.RootElement.GetProperty("client.dll")
-        .GetProperty("classes").GetProperty(type).GetProperty("fields").GetProperty(field).GetInt32();
+    private int Offset(string module, string name)
+    {
+        if (module != "client.dll") throw new InvalidOperationException($"Unsupported offset module: {module}.");
+        return context.Global(name);
+    }
+    private int Field(string type, string field) => context.Field(type, field);
     private T Value<T>(ulong owner, string type, string field) where T : unmanaged
     {
         Validation.Pointer(owner);
@@ -285,12 +328,10 @@ internal sealed class GameReader : IDisposable
     internal void VerifyMovementExperimentCode()
     {
         VerifyCameraExperimentCode();
-        var layout = PlayerCodeLayout.ForBuild(build);
-        // Explicit health comparison in this build: cmp dword ptr [rax+0x34c],r15d.
+        var layout = context.CodeLayout;
         byte[] expected = Convert.FromHexString(layout.MovementHealthHex);
-        if (Field("C_BaseEntity", "m_iHealth") != 844 ||
-            !Bytes(client + layout.MovementHealthRva, expected.Length).SequenceEqual(expected))
-            throw new InvalidOperationException($"Movement health-check bytes do not match inspected build {build}.");
+        if (!Bytes(client + layout.MovementHealthRva, expected.Length).SequenceEqual(expected))
+            throw new InvalidOperationException($"Movement health-check bytes changed after discovery for build {build}.");
     }
 
     internal bool MatchesCameraPawn(uint entityHandle, ulong pawn)
@@ -309,7 +350,7 @@ internal sealed class GameReader : IDisposable
 
     internal void VerifyCameraExperimentCode()
     {
-        var layout = PlayerCodeLayout.ForBuild(build);
+        var layout = context.CodeLayout;
         var mismatches = new List<string>();
         void Check(string name, ulong rva, string hex)
         {
@@ -317,7 +358,6 @@ internal sealed class GameReader : IDisposable
             byte[] actual = Bytes(client + rva, expected.Length);
             if (!actual.SequenceEqual(expected)) mismatches.Add($"{name}={Convert.ToHexString(actual)}");
         }
-        if (Field("C_BasePlayerPawn", "m_flDeathTime") != 5208) mismatches.Add("m_flDeathTime");
         Check("entry", layout.CameraEntryRva, layout.CameraEntryHex);
         Check("death-load", layout.CameraDeathLoadRva, layout.CameraDeathLoadHex);
         Check("compare", layout.CameraCompareRva, layout.CameraCompareHex);
@@ -400,7 +440,13 @@ internal sealed class GameReader : IDisposable
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or OverflowException)
         { state.Warnings.Add(ex.Message); }
     }
-    public void Dispose() { handle?.Dispose(); process.Dispose(); schema?.Dispose(); offsets?.Dispose(); }
+    internal void VerifyCompatibilityIdentity(GameReader other)
+    {
+        if (ProcessId != other.ProcessId || StartTicks != other.StartTicks)
+            throw new InvalidOperationException("CS2 process identity changed.");
+        context.RequireEquivalent(other.context);
+    }
+    public void Dispose() { handle?.Dispose(); process.Dispose(); }
 }
 
 internal sealed class Snapshot

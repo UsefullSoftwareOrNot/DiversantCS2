@@ -4,16 +4,38 @@ namespace CameraProbe;
 
 internal static class ReferenceProfile
 {
+    internal static ResolvedProfile ResolveOrDiscover(string root, string cacheRoot, string toolPath,
+        int build, string clientSha256, Func<bool> identityUnchanged, DumperInvoker runner,
+        string expectedToolHash = AutomaticProfile.PinnedDumperSha256)
+    {
+        string hash = NormalizeHash(clientSha256);
+        string? reviewed = TryResolve(root, build, hash);
+        if (reviewed is not null) return new(reviewed, ProfileSource.Reviewed);
+        return AutomaticProfile.Resolve(cacheRoot, toolPath, expectedToolHash, build, hash, identityUnchanged, runner);
+    }
+
     internal static string Resolve(string root, int build, string clientSha256)
     {
-        string hash = clientSha256.ToLowerInvariant();
-        if (hash.Length != 64 || hash.Any(c => !Uri.IsHexDigit(c)))
-            throw new InvalidOperationException("Invalid client.dll SHA-256 fingerprint.");
+        string hash = NormalizeHash(clientSha256);
+        return TryResolve(root, build, hash) ??
+            throw new InvalidOperationException($"No verified player schema is installed for engine build {build} and client.dll {hash[..12]}.");
+    }
+
+    private static string? TryResolve(string root, int build, string hash)
+    {
         string profile = Path.Combine(root, "builds",
             build.ToString(System.Globalization.CultureInfo.InvariantCulture), hash);
         if (Matches(profile, build, hash, allowLegacy14186: false)) return profile;
         if (Matches(root, build, hash, allowLegacy14186: build == 14186)) return root;
-        throw new InvalidOperationException($"No verified player schema is installed for engine build {build} and client.dll {hash[..12]}.");
+        return null;
+    }
+
+    private static string NormalizeHash(string clientSha256)
+    {
+        string hash = clientSha256.ToLowerInvariant();
+        if (hash.Length != 64 || hash.Any(c => !Uri.IsHexDigit(c)))
+            throw new InvalidOperationException("Invalid client.dll SHA-256 fingerprint.");
+        return hash;
     }
 
     private static bool Matches(string directory, int build, string clientSha256, bool allowLegacy14186)

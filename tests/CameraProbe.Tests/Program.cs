@@ -304,6 +304,90 @@ var tests = new (string Name, Action Run)[]
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }),
+    ("automatic profile rejects untrusted dumper and failed execution", () =>
+    {
+        string root = TempDirectory(), tool = Path.Combine(root, "dumper.exe");
+        File.WriteAllText(tool, "pinned test tool");
+        string toolHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(tool))).ToLowerInvariant();
+        try
+        {
+            Reject(() => AutomaticProfile.Resolve(Path.Combine(root, "cache"), tool, new string('0', 64),
+                15000, new string('a', 64), () => true, (_, _, _) => throw new Exception("Runner should not start")));
+            Reject(() => AutomaticProfile.Resolve(Path.Combine(root, "cache"), tool, toolHash,
+                15000, new string('b', 64), () => true, (_, _, _) => new DumperResult(7, false, "", "failed")));
+            Reject(() => AutomaticProfile.Resolve(Path.Combine(root, "cache"), tool, toolHash,
+                15000, new string('c', 64), () => true, (_, _, _) => new DumperResult(-1, true, "", "timeout")));
+        }
+        finally { Directory.Delete(root, true); }
+    }),
+    ("automatic profile publishes atomically only for the same game process", () =>
+    {
+        string root = TempDirectory(), cache = Path.Combine(root, "cache"), tool = Path.Combine(root, "dumper.exe");
+        File.WriteAllText(tool, "pinned test tool");
+        string toolHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(tool))).ToLowerInvariant();
+        const int build = 15001;
+        string hash = new('d', 64);
+        DumperResult Run(string _, string output, TimeSpan __) { WriteDiscoveryProfile(output, build); return new(0, false, "ok", ""); }
+        try
+        {
+            Reject(() => AutomaticProfile.Resolve(cache, tool, toolHash, build, hash, () => false, Run));
+            string final = Path.Combine(cache, build.ToString(), hash);
+            if (Directory.Exists(final)) throw new Exception("Changed process output became authoritative");
+            var resolved = AutomaticProfile.Resolve(cache, tool, toolHash, build, hash, () => true, Run);
+            if (resolved.Source != ProfileSource.Automatic || resolved.Path != final ||
+                !File.Exists(Path.Combine(final, "provenance.json")))
+                throw new Exception("Automatic profile was not published");
+        }
+        finally { Directory.Delete(root, true); }
+    }),
+    ("automatic profile validates output and replaces an incomplete cache", () =>
+    {
+        string root = TempDirectory(), cache = Path.Combine(root, "cache"), tool = Path.Combine(root, "dumper.exe");
+        File.WriteAllText(tool, "pinned test tool");
+        string toolHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(tool))).ToLowerInvariant();
+        try
+        {
+            void Rejected(char hashChar, Action<string> write) => Reject(() => AutomaticProfile.Resolve(cache, tool, toolHash,
+                15002, new string(hashChar, 64), () => true, (_, output, _) => { write(output); return new(0, false, "", ""); }));
+            Rejected('e', output => { Directory.CreateDirectory(output); File.WriteAllText(Path.Combine(output, "info.json"), "{}"); });
+            Rejected('f', output => WriteDiscoveryProfile(output, 15003));
+            Rejected('1', output => WriteDiscoveryProfile(output, 15002, globalOffset: -1));
+
+            string hash = new('2', 64), incomplete = Path.Combine(cache, "15002", hash);
+            Directory.CreateDirectory(incomplete);
+            File.WriteAllText(Path.Combine(incomplete, "info.json"), "incomplete");
+            var result = AutomaticProfile.Resolve(cache, tool, toolHash, 15002, hash, () => true,
+                (_, output, _) => { WriteDiscoveryProfile(output, 15002); return new(0, false, "", ""); });
+            if (result.Path != incomplete || !Directory.EnumerateDirectories(Path.GetDirectoryName(incomplete)!, hash + ".invalid-*").Any())
+                throw new Exception("Incomplete cache was reused or lost without quarantine");
+        }
+        finally { Directory.Delete(root, true); }
+    }),
+    ("valid automatic cache is reused and reviewed profile takes precedence", () =>
+    {
+        string root = TempDirectory(), reviewed = Path.Combine(root, "reference"), cache = Path.Combine(root, "cache");
+        string tool = Path.Combine(root, "dumper.exe"); File.WriteAllText(tool, "pinned test tool");
+        string toolHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(tool))).ToLowerInvariant();
+        int runs = 0;
+        try
+        {
+            const int autoBuild = 15004; string autoHash = new('3', 64);
+            string autoPath = Path.Combine(cache, autoBuild.ToString(), autoHash);
+            WriteDiscoveryProfile(autoPath, autoBuild, autoHash);
+            var cached = AutomaticProfile.Resolve(cache, tool, toolHash, autoBuild, autoHash, () => true,
+                (_, _, _) => { runs++; throw new Exception("Valid cache should not run dumper"); });
+            if (cached.Path != autoPath || runs != 0) throw new Exception("Valid automatic cache was not reused");
+
+            const int reviewedBuild = 15005; string reviewedHash = new('4', 64);
+            string reviewedPath = Path.Combine(reviewed, "builds", reviewedBuild.ToString(), reviewedHash);
+            WriteDiscoveryProfile(reviewedPath, reviewedBuild, reviewedHash);
+            var selected = ReferenceProfile.ResolveOrDiscover(reviewed, cache, Path.Combine(root, "missing.exe"),
+                reviewedBuild, reviewedHash, () => true, (_, _, _) => throw new Exception("Reviewed profile should win"));
+            if (selected.Source != ProfileSource.Reviewed || selected.Path != reviewedPath)
+                throw new Exception("Reviewed profile did not take precedence");
+        }
+        finally { Directory.Delete(root, true); }
+    }),
     ("new ConVar build does not enable old player schema", () => Reject(() => Validation.Build(14185, 14186))),
     ("camera read failure preserves valid team switch state", () =>
     {
@@ -495,4 +579,25 @@ static (int Rva, byte[] Code)[] CodeFixture(bool duplicateMovement = false, bool
     health.CopyTo(movement, 0xDE);
     if (duplicateMovement) health.CopyTo(movement, 0x120);
     return [(cameraRva, camera), (movementRva, movement)];
+}
+
+static string TempDirectory()
+{
+    string path = Path.Combine(Path.GetTempPath(), "camera-probe-test-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(path);
+    return path;
+}
+
+static void WriteDiscoveryProfile(string directory, int build, string? clientHash = null, int globalOffset = 4096)
+{
+    Directory.CreateDirectory(directory);
+    File.WriteAllText(Path.Combine(directory, "info.json"), $"{{\"build_number\":{build}}}");
+    File.WriteAllText(Path.Combine(directory, "offsets.json"),
+        $"{{\"client.dll\":{{\"dwLocalPlayerController\":{globalOffset},\"dwGameRules\":8192,\"dwGameEntitySystem\":12288,\"dwViewMatrix\":16384,\"dwViewAngles\":20480}}}}");
+    File.WriteAllText(Path.Combine(directory, "interfaces.json"), "{\"tier0.dll\":{\"VEngineCvar007\":3851888}}");
+    File.WriteAllText(Path.Combine(directory, "client_dll.json"),
+        "{\"client.dll\":{\"classes\":{\"C_BaseEntity\":{\"fields\":{\"m_iHealth\":844}},\"C_BasePlayerPawn\":{\"fields\":{\"m_flDeathTime\":5208}}}}}");
+    if (clientHash is not null)
+        File.WriteAllText(Path.Combine(directory, "provenance.json"),
+            $"{{\"kind\":\"automatic-local-discovery\",\"engine_build\":{build},\"client_sha256\":\"{clientHash}\"}}");
 }

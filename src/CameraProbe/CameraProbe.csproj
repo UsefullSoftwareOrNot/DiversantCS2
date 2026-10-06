@@ -9,5 +9,6 @@
   </PropertyGroup>
   <ItemGroup>
     <None Include="../../reference/**/*" Link="reference/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tools/**/*" Link="tools/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

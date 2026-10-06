@@ -32,7 +32,8 @@ internal static class MovementExperimentPolicy
 }
 
 internal sealed record MovementJournal(int ProcessId, long StartTicks, int Build,
-    uint EntityHandle, ulong Pawn, ulong Address, byte Team, int Round, int TemporaryHealth = 1);
+    uint EntityHandle, ulong Pawn, ulong Address, byte Team, int Round, int TemporaryHealth = 1,
+    string? ClientSha256 = null, string? CodeLayoutFingerprint = null);
 
 internal static class MovementExperiment
 {
@@ -84,7 +85,8 @@ internal static class MovementExperiment
             void Log(string kind, object value) => log.WriteLine(JsonSerializer.Serialize(new { kind, value }, Program.Json));
             var journal = new MovementJournal(reader.ProcessId, reader.StartTicks, reader.Build,
                 target.State.ControllerPawn!.Value, target.Pawn, target.HealthAddress,
-                target.State.Team!.Value, target.State.RoundStartCount!.Value, MovementExperimentPolicy.TemporaryHealth);
+                target.State.Team!.Value, target.State.RoundStartCount!.Value, MovementExperimentPolicy.TemporaryHealth,
+                reader.ClientSha256, reader.CodeLayoutFingerprint);
             bool attempted = false, completed = false;
             try
             {
@@ -141,13 +143,14 @@ internal static class MovementExperiment
         if (!File.Exists(JournalPath)) return;
         var j = JsonSerializer.Deserialize<MovementJournal>(File.ReadAllText(JournalPath))
             ?? throw new InvalidOperationException("Invalid movement journal.");
-        _ = PlayerCodeLayout.ForBuild(j.Build);
-        if (j.Address != j.Pawn + 844 || j.Team is not (2 or 3) || j.TemporaryHealth is not (1 or 10000))
+        CompatibilityJournalPolicy.Require(j.Build, j.ClientSha256, j.CodeLayoutFingerprint,
+            reader.Build, reader.ClientSha256, reader.CodeLayoutFingerprint, reader.ProfileSource);
+        if (j.Address != j.Pawn + (ulong)reader.SchemaField("C_BaseEntity", "m_iHealth") ||
+            j.Team is not (2 or 3) || j.TemporaryHealth is not (1 or 10000))
             throw new InvalidOperationException("Invalid movement restoration target.");
         if (!reader.HasExited && j.ProcessId == reader.ProcessId && j.StartTicks == reader.StartTicks &&
             reader.MatchesCameraPawn(j.EntityHandle, j.Pawn))
         {
-            if (j.Build != reader.Build) throw new InvalidOperationException("Movement journal build does not match CS2.");
             var state = reader.Capture();
             int health = reader.Read<int>(j.Address);
             if (MovementExperimentPolicy.ShouldRestore(health, completed,

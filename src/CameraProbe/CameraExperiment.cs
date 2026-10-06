@@ -56,7 +56,8 @@ internal static class CameraExperimentPolicy
 }
 
 internal sealed record CameraExperimentJournal(int ProcessId, long StartTicks, int Build,
-    uint EntityHandle, ulong Pawn, ulong Address, float Original);
+    uint EntityHandle, ulong Pawn, ulong Address, float Original,
+    string? ClientSha256 = null, string? CodeLayoutFingerprint = null);
 
 internal static class CameraExperiment
 {
@@ -104,7 +105,8 @@ internal static class CameraExperiment
             if (!float.IsFinite(original) || CameraExperimentPolicy.OwnsValue(original))
                 throw new InvalidOperationException("Unexpected existing death timestamp.");
             var journal = new CameraExperimentJournal(reader.ProcessId, reader.StartTicks, reader.Build,
-                target.State.ControllerPawn!.Value, target.Pawn, target.DeathTimeAddress, original);
+                target.State.ControllerPawn!.Value, target.Pawn, target.DeathTimeAddress, original,
+                reader.ClientSha256, reader.CodeLayoutFingerprint);
             Directory.CreateDirectory(Path.GetDirectoryName(JournalPath)!);
             using var writer = new StreamWriter(Path.Combine(Path.GetDirectoryName(JournalPath)!, $"camera-experiment-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.jsonl")) { AutoFlush = true };
             void Log(string kind, object value) => writer.WriteLine(JsonSerializer.Serialize(new { kind, value }, Program.Json));
@@ -195,8 +197,10 @@ internal static class CameraExperiment
         if (!reader.HasExited && journal.ProcessId == reader.ProcessId && journal.StartTicks == reader.StartTicks &&
             reader.MatchesCameraPawn(journal.EntityHandle, journal.Pawn))
         {
-            _ = PlayerCodeLayout.ForBuild(journal.Build);
-            if (journal.Build != reader.Build || journal.Address != journal.Pawn + 5208 || !float.IsFinite(journal.Original))
+            CompatibilityJournalPolicy.Require(journal.Build, journal.ClientSha256, journal.CodeLayoutFingerprint,
+                reader.Build, reader.ClientSha256, reader.CodeLayoutFingerprint, reader.ProfileSource);
+            if (journal.Address != journal.Pawn + (ulong)reader.SchemaField("C_BasePlayerPawn", "m_flDeathTime") ||
+                !float.IsFinite(journal.Original))
                 throw new InvalidOperationException("Invalid camera restoration target.");
             float current = reader.Read<float>(journal.Address);
             if (CameraExperimentPolicy.ShouldRestore(current, journal.Original, applicationCompleted))

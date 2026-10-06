@@ -24,6 +24,7 @@ internal sealed class GameReader : IDisposable
     internal string CodeLayoutFingerprint => context.CodeLayoutFingerprint;
     internal ulong ConVarInterfaceOffset => context.ConVarInterfaceRva;
     internal ProfileSource ProfileSource => context.Source;
+    internal int SchemaField(string type, string field) => context.Field(type, field);
 
     internal GameReader(string referenceDirectory, bool conVarsOnly = false)
     {
@@ -447,6 +448,27 @@ internal sealed class GameReader : IDisposable
         context.RequireEquivalent(other.context);
     }
     public void Dispose() { handle?.Dispose(); process.Dispose(); }
+}
+
+internal static class CompatibilityJournalPolicy
+{
+    internal static void Require(int journalBuild, string? journalClientSha256, string? journalCodeLayoutFingerprint,
+        int currentBuild, string currentClientSha256, string currentCodeLayoutFingerprint, ProfileSource currentSource)
+    {
+        if (journalBuild != currentBuild) throw new InvalidOperationException("Recovery journal build does not match CS2.");
+        bool hasClient = journalClientSha256 is not null, hasLayout = journalCodeLayoutFingerprint is not null;
+        if (hasClient != hasLayout) throw new InvalidOperationException("Recovery journal compatibility identity is incomplete.");
+        if (hasClient)
+        {
+            if (!string.Equals(journalClientSha256, currentClientSha256, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(journalCodeLayoutFingerprint, currentCodeLayoutFingerprint, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Recovery journal compatibility identity changed.");
+            return;
+        }
+        if (currentSource != ProfileSource.Reviewed)
+            throw new InvalidOperationException("Legacy recovery journals require an immutable reviewed profile.");
+        _ = PlayerCodeLayout.ForBuild(journalBuild);
+    }
 }
 
 internal sealed class Snapshot

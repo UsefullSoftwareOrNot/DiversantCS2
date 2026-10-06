@@ -443,6 +443,30 @@ var tests = new (string Name, Action Run)[]
         }
         finally { Directory.Delete(root, true); }
     }),
+    ("new recovery journals require matching client and code fingerprints", () =>
+    {
+        string client = new('9', 64), layout = new('a', 64);
+        CompatibilityJournalPolicy.Require(14189, client, layout, 14189, client, layout, ProfileSource.Reviewed);
+        CompatibilityJournalPolicy.Require(17000, client, layout, 17000, client, layout, ProfileSource.Automatic);
+        Reject(() => CompatibilityJournalPolicy.Require(14189, new string('b', 64), layout,
+            14189, client, layout, ProfileSource.Reviewed));
+        Reject(() => CompatibilityJournalPolicy.Require(14189, client, new string('b', 64),
+            14189, client, layout, ProfileSource.Reviewed));
+        Reject(() => CompatibilityJournalPolicy.Require(14189, client, null,
+            14189, client, layout, ProfileSource.Reviewed));
+    }),
+    ("legacy recovery journals require a reviewed static layout", () =>
+    {
+        string client = new('c', 64), layout = new('d', 64);
+        CompatibilityJournalPolicy.Require(14186, null, null, 14186, client, layout, ProfileSource.Reviewed);
+        CompatibilityJournalPolicy.Require(14189, null, null, 14189, client, layout, ProfileSource.Reviewed);
+        Reject(() => CompatibilityJournalPolicy.Require(17000, null, null,
+            17000, client, layout, ProfileSource.Automatic));
+        Reject(() => CompatibilityJournalPolicy.Require(14189, null, null,
+            14189, client, layout, ProfileSource.Automatic));
+        Reject(() => CompatibilityJournalPolicy.Require(14188, null, null,
+            14189, client, layout, ProfileSource.Reviewed));
+    }),
     ("new ConVar build does not enable old player schema", () => Reject(() => Validation.Build(14185, 14186))),
     ("camera read failure preserves valid team switch state", () =>
     {

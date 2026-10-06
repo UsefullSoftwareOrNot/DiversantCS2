@@ -217,8 +217,9 @@ var tests = new (string Name, Action Run)[]
         _ = ConVarLayout.ForBuild(14185);
         _ = ConVarLayout.ForBuild(14186);
         _ = ConVarLayout.ForBuild(14188);
+        _ = ConVarLayout.ForBuild(14189);
         Reject(() => ConVarLayout.ForBuild(14187));
-        Reject(() => ConVarLayout.ForBuild(14189));
+        Reject(() => ConVarLayout.ForBuild(14190));
         Reject(() => ConVarLayout.ForBuild(0));
     }),
     ("player code profiles use inspected instructions for each supported build", () =>
@@ -230,8 +231,13 @@ var tests = new (string Name, Action Run)[]
         if (current.CameraEntryRva != 0x8827BC || current.CameraDeathLoadRva != 0x8827E7 ||
             current.CameraCompareRva != 0x88280C || current.MovementHealthRva != 0x8C4ADE)
             throw new Exception("14188 code profile does not match inspected instructions");
+        var latest = PlayerCodeLayout.ForBuild(14189);
+        if (latest.CameraEntryRva != 0x8827BC || latest.CameraDeathLoadRva != 0x8827E7 ||
+            latest.CameraCompareRva != 0x88280C || latest.MovementHealthRva != 0x8C4ADE ||
+            latest.CameraCompareHex != "E82F9B8DFF0F2F05D4B2380176204D8BCF4D8BC6488BD6488BCFE8D5F2FFFF")
+            throw new Exception("14189 code profile does not match inspected instructions");
         Reject(() => PlayerCodeLayout.ForBuild(14187));
-        Reject(() => PlayerCodeLayout.ForBuild(14189));
+        Reject(() => PlayerCodeLayout.ForBuild(14190));
     }),
     ("player schema selection separates hotfixes that share an engine build", () =>
     {
@@ -254,14 +260,18 @@ var tests = new (string Name, Action Run)[]
             Profile(root, 14186, null); // Real 14186 metadata predates client hashing.
             string oldHotfix = Path.Combine(root, "builds", "14188", oldHotfixHash);
             string newHotfix = Path.Combine(root, "builds", "14188", newHotfixHash);
+            string latestBuild = Path.Combine(root, "builds", "14189", legacyHash);
             Profile(oldHotfix, 14188, oldHotfixHash);
             Profile(newHotfix, 14188, newHotfixHash);
+            Profile(latestBuild, 14189, legacyHash);
             if (ReferenceProfile.Resolve(root, 14186, legacyHash.ToUpperInvariant()) != root)
                 throw new Exception("Legacy schema was not selected by hash");
             if (ReferenceProfile.Resolve(root, 14188, oldHotfixHash) != oldHotfix)
                 throw new Exception("First hotfix schema was not selected");
             if (ReferenceProfile.Resolve(root, 14188, newHotfixHash) != newHotfix)
                 throw new Exception("Second hotfix schema was not selected");
+            if (ReferenceProfile.Resolve(root, 14189, legacyHash) != latestBuild)
+                throw new Exception("Latest build schema was not selected");
             Reject(() => ReferenceProfile.Resolve(root, 14188, legacyHash));
             Reject(() => ReferenceProfile.Resolve(root, 14189, newHotfixHash));
         }

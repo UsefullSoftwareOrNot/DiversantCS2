@@ -1,6 +1,6 @@
 @echo off
 setlocal
-echo Experimental LOCAL health check. Revision 2026-10-04-hotfix-fingerprint.
+echo Experimental LOCAL health check. Revision 2026-10-06-build-14189.
 echo Engine version and client.dll fingerprint are detected automatically.
 echo Leave CameraProbe running. At HP=0 outside freeze time, switch to CS2 and press Space.
 echo Waiting has no timeout. Keep this window open while reproducing the bug.

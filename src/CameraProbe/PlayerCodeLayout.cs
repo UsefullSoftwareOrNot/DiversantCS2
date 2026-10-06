@@ -24,6 +24,11 @@ internal sealed record PlayerCodeLayout(
             0x8827E7, "F30F108058140000",
             0x88280C, "E82F9B8DFF0F2F05D492380176204D8BCF4D8BC6488BD6488BCFE8D5F2FFFF",
             0x8C4ADE, "4439B84C0300007F1E"),
-        _ => throw new InvalidOperationException($"Unsupported player-code build {build}; supported: 14186, 14188.")
+        14189 => new(
+            0x8827BC, "488B4F38488B01FF90E804000084C0756D",
+            0x8827E7, "F30F108058140000",
+            0x88280C, "E82F9B8DFF0F2F05D4B2380176204D8BCF4D8BC6488BD6488BCFE8D5F2FFFF",
+            0x8C4ADE, "4439B84C0300007F1E"),
+        _ => throw new InvalidOperationException($"Unsupported player-code build {build}; supported: 14186, 14188, 14189.")
     };
 }

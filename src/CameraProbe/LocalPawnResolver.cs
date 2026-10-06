@@ -2,7 +2,7 @@ namespace CameraProbe;
 
 internal static class LocalPawnResolver
 {
-    // Source 2 CEntitySystem/CConcreteEntityList/CEntityIdentity, checked on builds 14186 and 14188.
+    // Source 2 CEntitySystem/CConcreteEntityList/CEntityIdentity, checked on builds 14186, 14188 and 14189.
     internal static ulong Resolve(ulong system, uint handle, Func<ulong, ulong> readPointer,
         Func<ulong, uint> readUInt, int identityField, bool retiredIsMissing = false)
     {

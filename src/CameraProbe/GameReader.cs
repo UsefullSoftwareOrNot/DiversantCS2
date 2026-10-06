@@ -309,17 +309,20 @@ internal sealed class GameReader : IDisposable
 
     internal void VerifyCameraExperimentCode()
     {
-        bool Matches(ulong rva, string hex)
+        var layout = PlayerCodeLayout.ForBuild(build);
+        var mismatches = new List<string>();
+        void Check(string name, ulong rva, string hex)
         {
             byte[] expected = Convert.FromHexString(hex);
-            return Bytes(client + rva, expected.Length).SequenceEqual(expected);
+            byte[] actual = Bytes(client + rva, expected.Length);
+            if (!actual.SequenceEqual(expected)) mismatches.Add($"{name}={Convert.ToHexString(actual)}");
         }
-        var layout = PlayerCodeLayout.ForBuild(build);
-        if (Field("C_BasePlayerPawn", "m_flDeathTime") != 5208 ||
-            !Matches(layout.CameraEntryRva, layout.CameraEntryHex) ||
-            !Matches(layout.CameraDeathLoadRva, layout.CameraDeathLoadHex) ||
-            !Matches(layout.CameraCompareRva, layout.CameraCompareHex))
-            throw new InvalidOperationException("Camera code does not match the inspected build; experiment refused.");
+        if (Field("C_BasePlayerPawn", "m_flDeathTime") != 5208) mismatches.Add("m_flDeathTime");
+        Check("entry", layout.CameraEntryRva, layout.CameraEntryHex);
+        Check("death-load", layout.CameraDeathLoadRva, layout.CameraDeathLoadHex);
+        Check("compare", layout.CameraCompareRva, layout.CameraCompareHex);
+        if (mismatches.Count != 0)
+            throw new InvalidOperationException($"Camera code does not match inspected build {build} ({string.Join(", ", mismatches)}); experiment refused.");
     }
 
     private void CaptureCamera(Snapshot state, ulong controller)

@@ -19,6 +19,8 @@ On 2026-10-02 build 14188 was inspected from the installed game. `VEngineCvar007
 
 On 2026-10-04 SourceRevision 11076591 replaced client.dll without changing engine build 14188. Player schemas are now selected by engine build plus the loaded client.dll SHA-256. This prevents a same-build hotfix from silently reusing stale player globals. ConVar-only mode remains build-based because it validates the live registry structure and both target identities before every write.
 
+On 2026-10-06 build 14189, SourceRevision 11087167 was inspected. `VEngineCvar007` remains at tier0.dll RVA 3851888. A complete live registry traversal again found the two target entries with the expected types and restriction flags before enabling the build.
+
 Journal original state before writes; use a per-process mutex. Flush a temporary file, then publish it by a non-overwriting rename. Resolve names uniquely, validate identity and type before each write. Re-discover targets in the current registry before automatic recovery, and retain the Ctrl+C handler until recovery finishes. Restore only owned flag bits, preserve unrelated bits. Validate saved process/start time and live identities before crash recovery. Do not write numeric values directly: mat_fullbright has an engine callback and raw value writes would skip it.
 
 Limitations: removing local flags may not bypass other engine checks. The server can update replicated values. Flag restoration does not restore numeric values changed through the console; print original-value commands. Remote reads/writes are not an atomic transaction with the engine; a concurrent engine change can race a write. No live command execution or visual recovery is claimed without observation.

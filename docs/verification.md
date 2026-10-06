@@ -118,3 +118,11 @@ Transient observations after a completed write end the current hold and restore 
 - Valve kept engine build 14188 but changed SourceRevision from 11064488 to 11076591 and replaced client.dll. The previous build-only profile read four stale global offsets, producing team 0 and an invalid entity pointer.
 - Build 14188 player profiles are now selected by both engine build and the verified client.dll SHA-256. Unknown same-build hotfixes are rejected instead of reusing stale offsets. The archived 14186 metadata predates client hashing and retains its explicit build-only fallback.
 - The new dump changes `dwCSGOInput`, `dwEntityList`, `dwGameEntitySystem`, and `dwViewAngles` by 16 bytes. Schema fields and the inspected camera/movement instruction blocks remain unchanged.
+
+## Build 14189 compatibility — 2026-10-06
+
+- `steam.inf` reports patch 1.41.8.9, SourceRevision 11087167; live signature discovery reports engine build 14189.
+- A fresh local cs2-dumper 0.1.3 run produced the fingerprinted 14189 schema for client.dll SHA-256 `7081d87fd49961a5d82e45abd0f0b8f8f05deeb3cb849837c1759716221c6977`. Player field offsets remain unchanged; the client globals used by CameraProbe moved.
+- `VEngineCvar007` remains at tier0.dll RVA 3851888. A complete live registry traversal validated unique `mat_fullbright` and `spec_freeze_time` entries with the expected types and restriction flags.
+- Camera entry/death-load RVAs remain 0x8827BC/0x8827E7, the camera comparison remains at 0x88280C with an updated RIP-relative displacement, and the movement health comparison remains at 0x8C4ADE. Restore-only commands verified the exact bytes against the loaded module.
+- Live `snapshot` completed on build 14189 with no warnings. The full C# suite passed 60/60.

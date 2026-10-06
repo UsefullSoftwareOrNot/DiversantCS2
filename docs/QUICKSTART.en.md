@@ -6,7 +6,7 @@
 
 - Windows x64.
 - .NET 10 SDK: `dotnet --list-sdks` must include a `10.*` version.
-- CS2 engine build **14186** or **14188** for the main mode. Other builds are intentionally rejected.
+- CS2 engine build **14186**, **14188**, or **14189** for the main mode. Other builds are intentionally rejected.
 - Git for cloning. Alternatively, download and extract the `main` branch ZIP from GitHub.
 
 ## Download and build

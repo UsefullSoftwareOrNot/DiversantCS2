@@ -20,6 +20,33 @@ var tests = new (string Name, Action Run)[]
         Reject(() => EngineBuildLocator.FindOffset(new[] { (0x1000, Pattern(int.MaxValue)) }, 0x6000));
         Reject(() => EngineBuildLocator.FindOffset(new[] { (0x1000, new byte[21]) }, 0x6000));
     }),
+    ("masked byte pattern requires exactly one match", () =>
+    {
+        var match = BytePattern.Parse("AA ?? CC").FindUnique(new[] { (0x1000, new byte[] { 0, 0xAA, 0x12, 0xCC }) });
+        if (match.Rva != 0x1001 || Convert.ToHexString(match.Bytes) != "AA12CC")
+            throw new Exception("Masked match was resolved incorrectly");
+        Reject(() => BytePattern.Parse("AA ?? CC").FindUnique(new[] { (0x1000, new byte[] { 0xAA, 0x12, 0 }) }));
+        Reject(() => BytePattern.Parse("AA ?? CC").FindUnique(new[]
+        {
+            (0x1000, new byte[] { 0xAA, 0x12, 0xCC }),
+            (0x2000, new byte[] { 0xAA, 0x34, 0xCC })
+        }));
+    }),
+    ("runtime player code locator resolves inspected 14189 instructions", () =>
+    {
+        var layout = PlayerCodeLocator.Locate(CodeFixture(), 0x2800000, 5208, 844);
+        if (layout.CameraEntryRva != 0x8827BC || layout.CameraDeathLoadRva != 0x8827E7 ||
+            layout.CameraCompareRva != 0x88280C || layout.MovementHealthRva != 0x8C4ADE ||
+            layout.Fingerprint.Length != 64)
+            throw new Exception("Runtime code layout was resolved incorrectly");
+    }),
+    ("runtime player code locator rejects ambiguous and incompatible instructions", () =>
+    {
+        Reject(() => PlayerCodeLocator.Locate(CodeFixture(duplicateMovement: true), 0x2800000, 5208, 844));
+        Reject(() => PlayerCodeLocator.Locate(CodeFixture(), 0x2800000, 5209, 844));
+        Reject(() => PlayerCodeLocator.Locate(CodeFixture(), 0x2800000, 5208, 845));
+        Reject(() => PlayerCodeLocator.Locate(CodeFixture(outOfRangeCall: true), 0x2800000, 5208, 844));
+    }),
     ("automatic health recovery does not carry into respawn or another round", () =>
     {
         var s = new Snapshot { Team = 2, Health = 10000, LifeState = 2, PawnIsAlive = false,
@@ -453,4 +480,19 @@ static void Cancelled(Action action)
 {
     try { action(); } catch (OperationCanceledException) { return; }
     throw new Exception("Expected cancellation");
+}
+
+static (int Rva, byte[] Code)[] CodeFixture(bool duplicateMovement = false, bool outOfRangeCall = false)
+{
+    const int cameraRva = 0x882700, movementRva = 0x8C4A00;
+    byte[] camera = new byte[0x200], movement = new byte[0x200];
+    Convert.FromHexString("488B4F38488B01FF90E804000084C0756D").CopyTo(camera, 0xBC);
+    Convert.FromHexString("F30F108058140000").CopyTo(camera, 0xE7);
+    byte[] compare = Convert.FromHexString("E82F9B8DFF0F2F05D4B2380176204D8BCF4D8BC6488BD6488BCFE8D5F2FFFF");
+    if (outOfRangeCall) BitConverter.GetBytes(int.MaxValue).CopyTo(compare, 1);
+    compare.CopyTo(camera, 0x10C);
+    byte[] health = Convert.FromHexString("4439B84C0300007F1E");
+    health.CopyTo(movement, 0xDE);
+    if (duplicateMovement) health.CopyTo(movement, 0x120);
+    return [(cameraRva, camera), (movementRva, movement)];
 }

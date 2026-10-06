@@ -1,3 +1,6 @@
+using System.Buffers.Binary;
+using System.Security.Cryptography;
+
 namespace CameraProbe;
 
 // Every entry is tied to instructions inspected in the matching client.dll.
@@ -12,6 +15,27 @@ internal sealed record PlayerCodeLayout(
     ulong MovementHealthRva,
     string MovementHealthHex)
 {
+    internal string Fingerprint
+    {
+        get
+        {
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            Append(CameraEntryRva, CameraEntryHex);
+            Append(CameraDeathLoadRva, CameraDeathLoadHex);
+            Append(CameraCompareRva, CameraCompareHex);
+            Append(MovementHealthRva, MovementHealthHex);
+            return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+
+            void Append(ulong rva, string hex)
+            {
+                Span<byte> address = stackalloc byte[8];
+                BinaryPrimitives.WriteUInt64LittleEndian(address, rva);
+                hash.AppendData(address);
+                hash.AppendData(Convert.FromHexString(hex));
+            }
+        }
+    }
+
     internal static PlayerCodeLayout ForBuild(int build) => build switch
     {
         14186 => new(

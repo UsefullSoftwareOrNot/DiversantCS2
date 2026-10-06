@@ -3,7 +3,7 @@ namespace CameraProbe;
 internal static class PlayerCodeLocator
 {
     private static readonly BytePattern CameraEntry = BytePattern.Parse(
-        "48 8B 4F 38 48 8B 01 FF 90 E8 04 00 00 84 C0 75 ??");
+        "48 8B 4F 38 48 8B 01 FF 90 E8 04 00 00 84 C0 75 6D");
     private static readonly BytePattern DeathLoad = BytePattern.Parse("F3 0F 10 80 ?? ?? ?? ??");
     private static readonly BytePattern CameraCompare = BytePattern.Parse(
         "E8 ?? ?? ?? ?? 0F 2F 05 ?? ?? ?? ?? 76 20 4D 8B CF 4D 8B C6 48 8B D6 48 8B CF E8 ?? ?? ?? ??");

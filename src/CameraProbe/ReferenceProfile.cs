@@ -6,7 +6,8 @@ internal static class ReferenceProfile
 {
     internal static ResolvedProfile ResolveOrDiscover(string root, string cacheRoot, string toolPath,
         int build, string clientSha256, Func<bool> identityUnchanged, DumperInvoker runner,
-        string expectedToolHash = AutomaticProfile.PinnedDumperSha256, bool forceAutomatic = false)
+        string expectedToolHash = AutomaticProfile.PinnedDumperSha256, bool forceAutomatic = false,
+        int clientImageSize = 0x40000000, int tier0ImageSize = 0x40000000)
     {
         string hash = NormalizeHash(clientSha256);
         if (!forceAutomatic)
@@ -14,7 +15,8 @@ internal static class ReferenceProfile
             string? reviewed = TryResolve(root, build, hash);
             if (reviewed is not null) return new(reviewed, ProfileSource.Reviewed);
         }
-        return AutomaticProfile.Resolve(cacheRoot, toolPath, expectedToolHash, build, hash, identityUnchanged, runner);
+        return AutomaticProfile.Resolve(cacheRoot, toolPath, expectedToolHash, build, hash,
+            identityUnchanged, runner, clientImageSize, tier0ImageSize);
     }
 
     internal static string Resolve(string root, int build, string clientSha256)

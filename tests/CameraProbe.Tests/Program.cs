@@ -46,6 +46,7 @@ var tests = new (string Name, Action Run)[]
         Reject(() => PlayerCodeLocator.Locate(CodeFixture(), 0x2800000, 5209, 844));
         Reject(() => PlayerCodeLocator.Locate(CodeFixture(), 0x2800000, 5208, 845));
         Reject(() => PlayerCodeLocator.Locate(CodeFixture(outOfRangeCall: true), 0x2800000, 5208, 844));
+        Reject(() => PlayerCodeLocator.Locate(CodeFixture(cameraBranchDisplacement: 0x6C), 0x2800000, 5208, 844));
         Reject(() => PlayerCodeLocator.Locate(CodeFixture(duplicateCameraCandidate: true), 0x2800000, 5208, 844));
     }),
     ("automatic health recovery does not carry into respawn or another round", () =>
@@ -334,9 +335,16 @@ var tests = new (string Name, Action Run)[]
             Reject(() => AutomaticProfile.Resolve(cache, tool, toolHash, build, hash, () => false, Run));
             string final = Path.Combine(cache, build.ToString(), hash);
             if (Directory.Exists(final)) throw new Exception("Changed process output became authoritative");
-            var resolved = AutomaticProfile.Resolve(cache, tool, toolHash, build, hash, () => true, Run);
+            string lateHash = new('6', 64); int lateChecks = 0;
+            Reject(() => AutomaticProfile.Resolve(cache, tool, toolHash, build, lateHash,
+                () => ++lateChecks == 1, Run));
+            if (Directory.Exists(Path.Combine(cache, build.ToString(), lateHash)) || lateChecks != 2)
+                throw new Exception("Identity was not rechecked immediately before publication");
+            int stableChecks = 0;
+            var resolved = AutomaticProfile.Resolve(cache, tool, toolHash, build, hash,
+                () => { stableChecks++; return true; }, Run);
             if (resolved.Source != ProfileSource.Automatic || resolved.Path != final ||
-                !File.Exists(Path.Combine(final, "provenance.json")))
+                !File.Exists(Path.Combine(final, "provenance.json")) || stableChecks != 2)
                 throw new Exception("Automatic profile was not published");
         }
         finally { Directory.Delete(root, true); }
@@ -353,6 +361,25 @@ var tests = new (string Name, Action Run)[]
             Rejected('e', output => { Directory.CreateDirectory(output); File.WriteAllText(Path.Combine(output, "info.json"), "{}"); });
             Rejected('f', output => WriteDiscoveryProfile(output, 15003));
             Rejected('1', output => WriteDiscoveryProfile(output, 15002, globalOffset: -1));
+            Rejected('8', output =>
+            {
+                WriteDiscoveryProfile(output, 15002);
+                string path = Path.Combine(output, "client_dll.json");
+                File.WriteAllText(path, File.ReadAllText(path).Replace("\"m_hObserverPawn\":2052,", ""));
+            });
+            Rejected('9', output =>
+            {
+                WriteDiscoveryProfile(output, 15002);
+                string path = Path.Combine(output, "offsets.json");
+                File.WriteAllText(path, File.ReadAllText(path).Replace("\"dwGameRules\":8192",
+                    "\"dwGameRules\":8192,\"dwGameRules\":8192"));
+            });
+            Reject(() => AutomaticProfile.Resolve(cache, tool, toolHash, 15002, new string('7', 64),
+                () => true, (_, output, _) =>
+                {
+                    WriteDiscoveryProfile(output, 15002, globalOffset: 6000, conVarOffset: 4000);
+                    return new(0, false, "", "");
+                }, clientImageSize: 5000, tier0ImageSize: 4050));
 
             string hash = new('2', 64), incomplete = Path.Combine(cache, "15002", hash);
             Directory.CreateDirectory(incomplete);
@@ -443,6 +470,17 @@ var tests = new (string Name, Action Run)[]
                 0x2800000, CodeFixture()));
             Reject(() => CompatibilityContext.Load(new(beyond, ProfileSource.Reviewed), build, hash,
                 0x2800000, CodeFixture()));
+        }
+        finally { Directory.Delete(root, true); }
+    }),
+    ("compatibility context rejects ConVar interface outside tier0", () =>
+    {
+        string root = TempDirectory(); const int build = 16003; string hash = new('c', 64);
+        try
+        {
+            WriteDiscoveryProfile(root, build, hash, conVarOffset: 0x500000);
+            Reject(() => CompatibilityContext.Load(new(root, ProfileSource.Automatic), build, hash,
+                0x2800000, CodeFixture(), tier0ImageSize: 0x500040));
         }
         finally { Directory.Delete(root, true); }
     }),
@@ -668,11 +706,14 @@ static void Cancelled(Action action)
 }
 
 static (int Rva, byte[] Code)[] CodeFixture(bool duplicateMovement = false, bool outOfRangeCall = false,
-    byte compareCallLow = 0x2F, bool decoyCameraEntry = false, bool duplicateCameraCandidate = false)
+    byte compareCallLow = 0x2F, bool decoyCameraEntry = false, bool duplicateCameraCandidate = false,
+    byte cameraBranchDisplacement = 0x6D)
 {
     const int cameraRva = 0x882700, movementRva = 0x8C4A00;
     byte[] camera = new byte[0x200], movement = new byte[0x200];
-    Convert.FromHexString("488B4F38488B01FF90E804000084C0756D").CopyTo(camera, 0xBC);
+    byte[] cameraEntry = Convert.FromHexString("488B4F38488B01FF90E804000084C0756D");
+    cameraEntry[^1] = cameraBranchDisplacement;
+    cameraEntry.CopyTo(camera, 0xBC);
     Convert.FromHexString("F30F108058140000").CopyTo(camera, 0xE7);
     byte[] compare = Convert.FromHexString("E82F9B8DFF0F2F05D4B2380176204D8BCF4D8BC6488BD6488BCFE8D5F2FFFF");
     compare[1] = compareCallLow;

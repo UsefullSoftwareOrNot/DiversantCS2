@@ -11,13 +11,15 @@ namespace CameraProbe;
 internal sealed class GameReader : IDisposable
 {
     private readonly Process process;
+    private readonly int processId;
+    private readonly long startTicks;
     private readonly SafeProcessHandle handle = null!;
     private readonly CompatibilityContext context = null!;
     private readonly ulong client;
     private readonly int build;
     private readonly bool conVarsOnly;
-    internal int ProcessId => process.Id;
-    internal long StartTicks => process.StartTime.ToUniversalTime().Ticks;
+    internal int ProcessId => processId;
+    internal long StartTicks => startTicks;
     internal bool HasExited => process.HasExited;
     internal int Build => build;
     internal string ClientSha256 => context.ClientSha256;
@@ -36,6 +38,8 @@ internal sealed class GameReader : IDisposable
             throw new InvalidOperationException($"Expected one cs2.exe process; found {candidates.Length}.");
         }
         process = candidates[0];
+        processId = process.Id;
+        startTicks = process.StartTime.ToUniversalTime().Ticks;
         try
         {
             handle = Native.OpenProcess(0x0010 | 0x1000, false, process.Id); // READ + QUERY_LIMITED_INFORMATION
@@ -43,6 +47,8 @@ internal sealed class GameReader : IDisposable
             build = DiscoverEngineBuild();
             ProcessModule clientModule = process.Modules.Cast<ProcessModule>().Single(m =>
                 m.ModuleName.Equals("client.dll", StringComparison.OrdinalIgnoreCase));
+            ProcessModule tier0Module = process.Modules.Cast<ProcessModule>().Single(m =>
+                m.ModuleName.Equals("tier0.dll", StringComparison.OrdinalIgnoreCase));
             string clientHash = DiscoverClientHash(clientModule);
             client = (ulong)clientModule.BaseAddress;
             string baseDirectory = Directory.GetParent(Path.GetFullPath(referenceDirectory))?.FullName ??
@@ -51,9 +57,10 @@ internal sealed class GameReader : IDisposable
                 Path.Combine(baseDirectory, "captures", "discovery", "profiles"),
                 Path.Combine(baseDirectory, "tools", "cs2-dumper.exe"), build, clientHash,
                 () => CompatibilityIdentityUnchanged(clientModule, clientHash), DumperRunner.Run,
-                forceAutomatic: forceAutomaticDiscovery);
+                forceAutomatic: forceAutomaticDiscovery, clientImageSize: clientModule.ModuleMemorySize,
+                tier0ImageSize: tier0Module.ModuleMemorySize);
             context = CompatibilityContext.Load(profile, build, clientHash, clientModule.ModuleMemorySize,
-                DiscoverExecutableSections(clientModule));
+                DiscoverExecutableSections(clientModule), tier0Module.ModuleMemorySize);
         }
         catch { Dispose(); throw; }
     }
@@ -62,11 +69,18 @@ internal sealed class GameReader : IDisposable
     {
         try
         {
-            if (process.HasExited || process.StartTime.ToUniversalTime().Ticks != StartTicks) return false;
-            ProcessModule current = process.Modules.Cast<ProcessModule>().Single(m =>
-                m.ModuleName.Equals("client.dll", StringComparison.OrdinalIgnoreCase));
-            return current.BaseAddress == originalModule.BaseAddress && current.ModuleMemorySize == originalModule.ModuleMemorySize &&
-                DiscoverClientHash(current).Equals(clientHash, StringComparison.OrdinalIgnoreCase);
+            Process[] candidates = Process.GetProcessesByName("cs2");
+            try
+            {
+                if (candidates.Length != 1 || candidates[0].Id != processId ||
+                    candidates[0].StartTime.ToUniversalTime().Ticks != startTicks) return false;
+                ProcessModule current = candidates[0].Modules.Cast<ProcessModule>().Single(m =>
+                    m.ModuleName.Equals("client.dll", StringComparison.OrdinalIgnoreCase));
+                return current.BaseAddress == originalModule.BaseAddress &&
+                    current.ModuleMemorySize == originalModule.ModuleMemorySize &&
+                    DiscoverClientHash(current).Equals(clientHash, StringComparison.OrdinalIgnoreCase);
+            }
+            finally { foreach (Process candidate in candidates) candidate.Dispose(); }
         }
         catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or IOException) { return false; }
     }

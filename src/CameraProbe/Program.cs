@@ -96,8 +96,7 @@ internal static class Program
                         {
                             using var cameraReader = new GameReader(Path.Combine(AppContext.BaseDirectory, "reference"),
                                 forceAutomaticDiscovery: forceAutomaticDiscovery);
-                            if (cameraReader.ProcessId != reader.ProcessId || cameraReader.StartTicks != reader.StartTicks)
-                                throw new InvalidOperationException("CS2 restarted before camera recovery began.");
+                            reader.VerifyCompatibilityIdentity(cameraReader);
                             CameraExperiment.Run(cameraReader, maintain: true, sessionStop: interactionStop.Token);
                         }
                         catch { interactionStop.Cancel(); throw; }
@@ -108,8 +107,7 @@ internal static class Program
                         {
                             using var movementReader = new GameReader(Path.Combine(AppContext.BaseDirectory, "reference"),
                                 forceAutomaticDiscovery: forceAutomaticDiscovery);
-                            if (movementReader.ProcessId != reader.ProcessId || movementReader.StartTicks != reader.StartTicks)
-                                throw new InvalidOperationException("CS2 restarted before movement recovery began.");
+                            reader.VerifyCompatibilityIdentity(movementReader);
                             MovementExperiment.Run(movementReader, automatic: true, sessionStop: interactionStop.Token);
                         }
                         catch { interactionStop.Cancel(); throw; }

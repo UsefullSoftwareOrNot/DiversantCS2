@@ -4,35 +4,6 @@ namespace CameraProbe;
 
 internal sealed class CompatibilityContext
 {
-    private static readonly string[] RequiredGlobals =
-        ["dwLocalPlayerController", "dwGameRules", "dwGameEntitySystem", "dwViewMatrix", "dwViewAngles"];
-    private static readonly (string Type, string Field)[] RequiredFields =
-    [
-        ("CEntityInstance", "m_pEntity"), ("CEntityIdentity", "m_designerName"),
-        ("CBasePlayerController", "m_bIsLocalPlayerController"), ("CBasePlayerController", "m_hPawn"),
-        ("CCSPlayerController", "m_hPlayerPawn"), ("CCSPlayerController", "m_hObserverPawn"),
-        ("CCSPlayerController", "m_bPawnIsAlive"), ("C_BaseEntity", "m_iTeamNum"),
-        ("C_BaseEntity", "m_pGameSceneNode"), ("C_BaseEntity", "m_fFlags"),
-        ("C_BaseEntity", "m_hGroundEntity"), ("C_BaseEntity", "m_MoveType"),
-        ("C_BaseEntity", "m_vecAbsVelocity"), ("C_BaseEntity", "m_vecServerVelocity"),
-        ("C_BaseEntity", "m_iHealth"), ("C_BaseEntity", "m_lifeState"),
-        ("CGameSceneNode", "m_vecAbsOrigin"), ("C_BasePlayerPawn", "m_pMovementServices"),
-        ("C_BasePlayerPawn", "m_flDeathTime"), ("C_BasePlayerPawn", "m_hController"),
-        ("C_BasePlayerPawn", "v_angle"), ("C_BasePlayerPawn", "m_vecLastCameraSetupLocalOrigin"),
-        ("C_BasePlayerPawn", "m_flLastCameraSetupTime"), ("C_BasePlayerPawn", "m_pCameraServices"),
-        ("C_BasePlayerPawn", "m_pObserverServices"), ("CPlayer_MovementServices", "m_nButtons"),
-        ("CPlayer_MovementServices", "m_nLastCommandNumberProcessed"),
-        ("CPlayer_MovementServices", "m_flCmdForwardMove"), ("CCSPlayer_MovementServices", "m_ModernJump"),
-        ("CCSPlayer_MovementServices", "m_nLastJumpTick"),
-        ("CCSPlayerModernJump", "m_nLastActualJumpPressTick"),
-        ("CCSPlayerModernJump", "m_nLastUsableJumpPressTick"), ("CCSPlayerModernJump", "m_nLastLandedTick"),
-        ("C_CSGameRules", "m_bFreezePeriod"), ("C_CSGameRules", "m_nRoundStartCount"),
-        ("CPlayer_CameraServices", "m_hViewEntity"), ("CPlayer_ObserverServices", "m_iObserverMode"),
-        ("CPlayer_ObserverServices", "m_hObserverTarget"),
-        ("CPlayer_ObserverServices", "m_bForcedObserverMode"),
-        ("CPlayer_ObserverServices", "m_iObserverLastMode")
-    ];
-
     private readonly Dictionary<string, int> globals;
     private readonly Dictionary<string, int> fields;
     internal int Build { get; }
@@ -52,9 +23,11 @@ internal sealed class CompatibilityContext
     }
 
     internal static CompatibilityContext Load(ResolvedProfile profile, int build, string clientSha256,
-        int clientImageSize, IEnumerable<(int Rva, byte[] Code)> executableSections)
+        int clientImageSize, IEnumerable<(int Rva, byte[] Code)> executableSections,
+        int tier0ImageSize = 0x40000000)
     {
-        if (build <= 0 || clientImageSize <= 0) throw new InvalidOperationException("Invalid compatibility identity.");
+        if (build <= 0 || clientImageSize <= 0 || tier0ImageSize <= 0)
+            throw new InvalidOperationException("Invalid compatibility identity.");
         string hash = NormalizeHash(clientSha256);
         using var info = JsonDocument.Parse(File.ReadAllText(Path.Combine(profile.Path, "info.json")));
         if (info.RootElement.GetProperty("build_number").GetInt32() != build)
@@ -73,10 +46,10 @@ internal sealed class CompatibilityContext
         var globals = new Dictionary<string, int>(StringComparer.Ordinal);
         using (var offsets = JsonDocument.Parse(File.ReadAllText(Path.Combine(profile.Path, "offsets.json"))))
         {
-            JsonElement module = offsets.RootElement.GetProperty("client.dll");
-            foreach (string name in RequiredGlobals)
+            JsonElement module = CompatibilityRequirements.Unique(offsets.RootElement, "client.dll");
+            foreach (string name in CompatibilityRequirements.Globals)
             {
-                int value = module.GetProperty(name).GetInt32();
+                int value = CompatibilityRequirements.Unique(module, name).GetInt32();
                 if (value <= 0 || value >= clientImageSize)
                     throw new InvalidOperationException($"Client global is outside client.dll: {name}.");
                 globals.Add(name, value);
@@ -86,10 +59,13 @@ internal sealed class CompatibilityContext
         var fields = new Dictionary<string, int>(StringComparer.Ordinal);
         using (var schema = JsonDocument.Parse(File.ReadAllText(Path.Combine(profile.Path, "client_dll.json"))))
         {
-            JsonElement classes = schema.RootElement.GetProperty("client.dll").GetProperty("classes");
-            foreach (var (type, field) in RequiredFields)
+            JsonElement classes = CompatibilityRequirements.Unique(
+                CompatibilityRequirements.Unique(schema.RootElement, "client.dll"), "classes");
+            foreach (var (type, field) in CompatibilityRequirements.Fields)
             {
-                int value = classes.GetProperty(type).GetProperty("fields").GetProperty(field).GetInt32();
+                JsonElement typeFields = CompatibilityRequirements.Unique(
+                    CompatibilityRequirements.Unique(classes, type), "fields");
+                int value = CompatibilityRequirements.Unique(typeFields, field).GetInt32();
                 if (value < 0 || value >= 0x10000)
                     throw new InvalidOperationException($"Schema field is out of range: {type}.{field}.");
                 fields.Add(Key(type, field), value);
@@ -99,8 +75,9 @@ internal sealed class CompatibilityContext
         ulong conVar;
         using (var interfaces = JsonDocument.Parse(File.ReadAllText(Path.Combine(profile.Path, "interfaces.json"))))
         {
-            long value = interfaces.RootElement.GetProperty("tier0.dll").GetProperty("VEngineCvar007").GetInt64();
-            if (value <= 0 || value >= 0x40000000)
+            long value = CompatibilityRequirements.Unique(
+                CompatibilityRequirements.Unique(interfaces.RootElement, "tier0.dll"), "VEngineCvar007").GetInt64();
+            if (value <= 0 || value > tier0ImageSize - 0x80L)
                 throw new InvalidOperationException("VEngineCvar007 is out of range.");
             conVar = (ulong)value;
         }

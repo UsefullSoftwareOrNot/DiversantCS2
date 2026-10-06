@@ -32,18 +32,23 @@ internal static class Program
                 throw new InvalidOperationException("Requires Windows x64.");
             if (args[0] is not ("snapshot" or "jump-record" or "movement-experiment" or "movement-restore" or "watch" or "play" or "cvars" or "cvars-unlock" or "cvars-restore" or "camera-experiment" or "camera-restore" or "camera-recover")) throw new InvalidOperationException("Unknown command. Use --help.");
             bool bindingsReady = false;
+            bool forceAutomaticDiscovery = false;
             int delay = 75;
             for (int i = 1; i < args.Length; i++)
             {
-                if (args[0] is not ("watch" or "play")) throw new InvalidOperationException("This command takes no options.");
-                if (args[i] is "--bindings-ready" or "--enable-switching") bindingsReady = true;
+                if (args[i] == "--force-auto-discovery") forceAutomaticDiscovery = true;
+                else if (args[0] is not ("watch" or "play")) throw new InvalidOperationException("This command takes no options.");
+                else if (args[i] is "--bindings-ready" or "--enable-switching") bindingsReady = true;
                 else if (args[i] == "--delay-ms" && i + 1 < args.Length && int.TryParse(args[++i], out int value)) delay = value;
                 else throw new InvalidOperationException("Invalid option. Use --help.");
             }
             _ = SwitchPolicy.Teams(2, true, true, delay);
             if (bindingsReady && args[0] != "play") throw new InvalidOperationException("Для F6 используйте play --enable-switching: применение изображения требует сессии ConVars.");
             bool conVarsOnly = args[0].StartsWith("cvars", StringComparison.Ordinal);
-            using var reader = new GameReader(Path.Combine(AppContext.BaseDirectory, "reference"), conVarsOnly);
+            using var reader = new GameReader(Path.Combine(AppContext.BaseDirectory, "reference"), conVarsOnly,
+                forceAutomaticDiscovery);
+            Console.Error.WriteLine(CompatibilityReport.Format(reader.ProfileSource, reader.Build,
+                reader.ClientSha256, reader.CodeLayoutFingerprint));
             if (args[0] is "movement-experiment" or "movement-restore")
             {
                 MovementExperiment.Run(reader, args[0] == "movement-restore");
@@ -89,7 +94,8 @@ internal static class Program
                     {
                         try
                         {
-                            using var cameraReader = new GameReader(Path.Combine(AppContext.BaseDirectory, "reference"));
+                            using var cameraReader = new GameReader(Path.Combine(AppContext.BaseDirectory, "reference"),
+                                forceAutomaticDiscovery: forceAutomaticDiscovery);
                             if (cameraReader.ProcessId != reader.ProcessId || cameraReader.StartTicks != reader.StartTicks)
                                 throw new InvalidOperationException("CS2 restarted before camera recovery began.");
                             CameraExperiment.Run(cameraReader, maintain: true, sessionStop: interactionStop.Token);
@@ -100,7 +106,8 @@ internal static class Program
                     {
                         try
                         {
-                            using var movementReader = new GameReader(Path.Combine(AppContext.BaseDirectory, "reference"));
+                            using var movementReader = new GameReader(Path.Combine(AppContext.BaseDirectory, "reference"),
+                                forceAutomaticDiscovery: forceAutomaticDiscovery);
                             if (movementReader.ProcessId != reader.ProcessId || movementReader.StartTicks != reader.StartTicks)
                                 throw new InvalidOperationException("CS2 restarted before movement recovery began.");
                             MovementExperiment.Run(movementReader, automatic: true, sessionStop: interactionStop.Token);

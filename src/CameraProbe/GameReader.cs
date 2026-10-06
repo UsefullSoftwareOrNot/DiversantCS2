@@ -26,7 +26,7 @@ internal sealed class GameReader : IDisposable
     internal ProfileSource ProfileSource => context.Source;
     internal int SchemaField(string type, string field) => context.Field(type, field);
 
-    internal GameReader(string referenceDirectory, bool conVarsOnly = false)
+    internal GameReader(string referenceDirectory, bool conVarsOnly = false, bool forceAutomaticDiscovery = false)
     {
         this.conVarsOnly = conVarsOnly;
         var candidates = Process.GetProcessesByName("cs2");
@@ -50,7 +50,8 @@ internal sealed class GameReader : IDisposable
             var profile = ReferenceProfile.ResolveOrDiscover(referenceDirectory,
                 Path.Combine(baseDirectory, "captures", "discovery", "profiles"),
                 Path.Combine(baseDirectory, "tools", "cs2-dumper.exe"), build, clientHash,
-                () => CompatibilityIdentityUnchanged(clientModule, clientHash), DumperRunner.Run);
+                () => CompatibilityIdentityUnchanged(clientModule, clientHash), DumperRunner.Run,
+                forceAutomatic: forceAutomaticDiscovery);
             context = CompatibilityContext.Load(profile, build, clientHash, clientModule.ModuleMemorySize,
                 DiscoverExecutableSections(clientModule));
         }

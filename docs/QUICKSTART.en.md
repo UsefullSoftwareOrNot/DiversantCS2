@@ -6,7 +6,7 @@
 
 - Windows x64.
 - .NET 10 SDK: `dotnet --list-sdks` must include a `10.*` version.
-- CS2 engine build **14186**, **14188**, or **14189** for the main mode. Other builds are intentionally rejected.
+- A running CS2 installation. Reviewed builds start immediately; routine new builds use guarded local discovery.
 - Git for cloning. Alternatively, download and extract the `main` branch ZIP from GitHub.
 
 ## Download and build
@@ -45,6 +45,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run.ps1 -EnableSwitchi
 
 F6 uses `spec_freeze_time 1000` and `mat_fullbright 1`. No `camera_probe` configuration is required.
 
+On startup, CameraProbe prints `source=reviewed` for a bundled reviewed profile or `source=automatic` for a locally discovered profile. Automatic discovery is offline: the bundled, SHA-256-pinned `cs2-dumper` writes a cache below `captures/discovery/profiles/<build>/<client-sha256>/`, and CameraProbe independently validates every required field, global, interface and code pattern before enabling writes. Missing or ambiguous structures stop startup.
+
 Camera recovery starts automatically for the recognized bug state. At HP=0, with camera recovery active and outside freeze time, the main mode experimentally sets **local HP=10000**. A separate `Test-Movement.cmd` session or Space press is not required.
 
 This does not change server health. Restoration of server-accepted movement is **unconfirmed**. The game may overwrite local health. On context changes, the program checks whether restoration is valid and retains a journal if the result is ambiguous. The numeric values of the two ConVars are not automatically reset on exit.
@@ -55,5 +57,6 @@ This does not change server health. Restoration of server-accepted movement is *
 - One state snapshot: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run.ps1 -Snapshot`.
 - If the DLL is locked, close the old CameraProbe window with Ctrl+C. CS2 can remain open.
 - If an update is staged in `artifacts/CameraProbe.update/`, the next main `.cmd` launch installs it.
-- If the game build is unsupported, do not just edit the schema build number: offsets and machine-code checks need separate verification.
+- If automatic discovery rejects an update, keep the error text. Do not edit a schema build number or copy an older cache.
+- Internal diagnostic: append `--force-auto-discovery` to a direct CameraProbe command, or use `Run.ps1 -ForceAutoDiscovery`, to bypass a reviewed profile and verify the automatic path.
 - To update from Git, close CameraProbe, run `git pull --ff-only`, and repeat the build command.

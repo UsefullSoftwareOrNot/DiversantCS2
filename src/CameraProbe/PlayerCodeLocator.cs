@@ -24,19 +24,32 @@ internal static class PlayerCodeLocator
             catch (InvalidOperationException ex) { throw new InvalidOperationException($"Unable to locate {name} code.", ex); }
         }
 
-        PatternMatch entry = Find("camera-entry", CameraEntry, sections);
-        var owner = sections.Single(s => entry.Rva >= s.Rva && entry.Rva < (long)s.Rva + s.Code.Length);
-        int local = entry.Rva - owner.Rva;
-        int neighborhoodLength = Math.Min(0x100, owner.Code.Length - local);
-        var neighborhood = new[] { (entry.Rva, owner.Code.AsSpan(local, neighborhoodLength).ToArray()) };
-
-        PatternMatch death = Find("camera death-load", DeathLoad, neighborhood);
-        if (BitConverter.ToInt32(death.Bytes, 4) != deathTimeOffset)
-            throw new InvalidOperationException("Camera death-time field displacement does not match the schema.");
-        PatternMatch compare = Find("camera comparison", CameraCompare, neighborhood);
-        ValidateRelativeTarget(compare.Rva, compare.Bytes, 0, 1, 5, imageSize);
-        ValidateRelativeTarget(compare.Rva, compare.Bytes, 5, 8, 7, imageSize);
-        ValidateRelativeTarget(compare.Rva, compare.Bytes, 26, 27, 5, imageSize);
+        var cameraCandidates = new List<(PatternMatch Entry, PatternMatch Death, PatternMatch Compare)>();
+        foreach (PatternMatch entryMatch in CameraEntry.FindAll(sections))
+        {
+            var owner = sections.Single(s => entryMatch.Rva >= s.Rva &&
+                entryMatch.Rva < (long)s.Rva + s.Code.Length);
+            int local = entryMatch.Rva - owner.Rva;
+            int neighborhoodLength = Math.Min(0x100, owner.Code.Length - local);
+            var neighborhood = new[]
+                { (entryMatch.Rva, owner.Code.AsSpan(local, neighborhoodLength).ToArray()) };
+            try
+            {
+                PatternMatch deathMatch = DeathLoad.FindUnique(neighborhood);
+                if (BitConverter.ToInt32(deathMatch.Bytes, 4) != deathTimeOffset) continue;
+                PatternMatch compareMatch = CameraCompare.FindUnique(neighborhood);
+                ValidateRelativeTarget(compareMatch.Rva, compareMatch.Bytes, 0, 1, 5, imageSize);
+                ValidateRelativeTarget(compareMatch.Rva, compareMatch.Bytes, 5, 8, 7, imageSize);
+                ValidateRelativeTarget(compareMatch.Rva, compareMatch.Bytes, 26, 27, 5, imageSize);
+                cameraCandidates.Add((entryMatch, deathMatch, compareMatch));
+            }
+            catch (InvalidOperationException) { }
+        }
+        if (cameraCandidates.Count != 1)
+            throw new InvalidOperationException(cameraCandidates.Count == 0
+                ? "Unable to locate a structurally valid camera code block."
+                : "Camera code block is ambiguous.");
+        var (entry, death, compare) = cameraCandidates[0];
 
         PatternMatch movement = Find("movement health-check", MovementHealth, sections);
         if (BitConverter.ToInt32(movement.Bytes, 3) != healthOffset)

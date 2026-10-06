@@ -1,8 +1,8 @@
 @echo off
 setlocal
-echo CameraProbe. Revision 2026-10-06-build-14189.
-echo Engine version and client.dll fingerprint are detected automatically.
-echo Verified player profiles: 14186, both known 14188 revisions, and 14189.
+echo CameraProbe. Revision 2026-10-06-auto-discovery.
+echo Engine version, client.dll fingerprint and required positions are detected automatically.
+echo Reviewed profiles are preferred; routine new builds use guarded offline discovery.
 echo F6: always recover image commands; switch teams only when T/CT freeze time is available.
 echo Enable the developer console on the standard tilde key. No cfg is needed.
 echo F7: record camera. F8: cancel recording.

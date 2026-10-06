@@ -6,11 +6,14 @@ internal static class ReferenceProfile
 {
     internal static ResolvedProfile ResolveOrDiscover(string root, string cacheRoot, string toolPath,
         int build, string clientSha256, Func<bool> identityUnchanged, DumperInvoker runner,
-        string expectedToolHash = AutomaticProfile.PinnedDumperSha256)
+        string expectedToolHash = AutomaticProfile.PinnedDumperSha256, bool forceAutomatic = false)
     {
         string hash = NormalizeHash(clientSha256);
-        string? reviewed = TryResolve(root, build, hash);
-        if (reviewed is not null) return new(reviewed, ProfileSource.Reviewed);
+        if (!forceAutomatic)
+        {
+            string? reviewed = TryResolve(root, build, hash);
+            if (reviewed is not null) return new(reviewed, ProfileSource.Reviewed);
+        }
         return AutomaticProfile.Resolve(cacheRoot, toolPath, expectedToolHash, build, hash, identityUnchanged, runner);
     }
 

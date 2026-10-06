@@ -33,7 +33,13 @@ internal sealed class BytePattern
 
     internal PatternMatch FindUnique(IEnumerable<(int Rva, byte[] Code)> sections)
     {
-        PatternMatch? found = null;
+        PatternMatch[] matches = FindAll(sections).ToArray();
+        if (matches.Length > 1) throw new InvalidOperationException("Byte pattern is ambiguous.");
+        return matches.SingleOrDefault() ?? throw new InvalidOperationException("Byte pattern was not found.");
+    }
+
+    internal IEnumerable<PatternMatch> FindAll(IEnumerable<(int Rva, byte[] Code)> sections)
+    {
         foreach (var (rva, code) in sections)
         {
             if (rva < 0 || code is null) throw new InvalidOperationException("Invalid code section.");
@@ -43,13 +49,11 @@ internal sealed class BytePattern
                 for (int index = 0; index < values.Length; index++)
                     if (exact[index] && code[offset + index] != values[index]) { matches = false; break; }
                 if (!matches) continue;
-                if (found is not null) throw new InvalidOperationException("Byte pattern is ambiguous.");
                 int address;
                 try { address = checked(rva + offset); }
                 catch (OverflowException ex) { throw new InvalidOperationException("Pattern address overflowed.", ex); }
-                found = new PatternMatch(address, code.AsSpan(offset, values.Length).ToArray());
+                yield return new PatternMatch(address, code.AsSpan(offset, values.Length).ToArray());
             }
         }
-        return found ?? throw new InvalidOperationException("Byte pattern was not found.");
     }
 }

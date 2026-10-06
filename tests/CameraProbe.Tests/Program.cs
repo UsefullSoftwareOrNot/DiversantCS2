@@ -34,7 +34,7 @@ var tests = new (string Name, Action Run)[]
     }),
     ("runtime player code locator resolves inspected 14189 instructions", () =>
     {
-        var layout = PlayerCodeLocator.Locate(CodeFixture(), 0x2800000, 5208, 844);
+        var layout = PlayerCodeLocator.Locate(CodeFixture(decoyCameraEntry: true), 0x2800000, 5208, 844);
         if (layout.CameraEntryRva != 0x8827BC || layout.CameraDeathLoadRva != 0x8827E7 ||
             layout.CameraCompareRva != 0x88280C || layout.MovementHealthRva != 0x8C4ADE ||
             layout.Fingerprint.Length != 64)
@@ -46,6 +46,7 @@ var tests = new (string Name, Action Run)[]
         Reject(() => PlayerCodeLocator.Locate(CodeFixture(), 0x2800000, 5209, 844));
         Reject(() => PlayerCodeLocator.Locate(CodeFixture(), 0x2800000, 5208, 845));
         Reject(() => PlayerCodeLocator.Locate(CodeFixture(outOfRangeCall: true), 0x2800000, 5208, 844));
+        Reject(() => PlayerCodeLocator.Locate(CodeFixture(duplicateCameraCandidate: true), 0x2800000, 5208, 844));
     }),
     ("automatic health recovery does not carry into respawn or another round", () =>
     {
@@ -385,8 +386,29 @@ var tests = new (string Name, Action Run)[]
                 reviewedBuild, reviewedHash, () => true, (_, _, _) => throw new Exception("Reviewed profile should win"));
             if (selected.Source != ProfileSource.Reviewed || selected.Path != reviewedPath)
                 throw new Exception("Reviewed profile did not take precedence");
+
+            string forcedPath = Path.Combine(cache, reviewedBuild.ToString(), reviewedHash);
+            WriteDiscoveryProfile(forcedPath, reviewedBuild, reviewedHash);
+            var forced = ReferenceProfile.ResolveOrDiscover(reviewed, cache, Path.Combine(root, "missing.exe"),
+                reviewedBuild, reviewedHash, () => true,
+                (_, _, _) => throw new Exception("Forced discovery should reuse the automatic cache"),
+                forceAutomatic: true);
+            if (forced.Source != ProfileSource.Automatic || forced.Path != forcedPath || runs != 0)
+                throw new Exception("Forced discovery did not bypass the reviewed profile");
         }
         finally { Directory.Delete(root, true); }
+    }),
+    ("compatibility startup report identifies reviewed and automatic provenance", () =>
+    {
+        string hash = new('a', 64), code = new('b', 64);
+        string reviewed = CompatibilityReport.Format(ProfileSource.Reviewed, 14189, hash, code);
+        string automatic = CompatibilityReport.Format(ProfileSource.Automatic, 14189, hash, code);
+        if (!reviewed.Contains("source=reviewed", StringComparison.Ordinal) ||
+            !automatic.Contains("source=automatic", StringComparison.Ordinal) ||
+            !reviewed.Contains("build=14189", StringComparison.Ordinal) ||
+            !reviewed.Contains(hash[..12], StringComparison.Ordinal) ||
+            !reviewed.Contains(code[..12], StringComparison.Ordinal))
+            throw new Exception("Compatibility provenance is not visible at startup");
     }),
     ("compatibility context extracts required positions equally from reviewed and automatic profiles", () =>
     {
@@ -646,7 +668,7 @@ static void Cancelled(Action action)
 }
 
 static (int Rva, byte[] Code)[] CodeFixture(bool duplicateMovement = false, bool outOfRangeCall = false,
-    byte compareCallLow = 0x2F)
+    byte compareCallLow = 0x2F, bool decoyCameraEntry = false, bool duplicateCameraCandidate = false)
 {
     const int cameraRva = 0x882700, movementRva = 0x8C4A00;
     byte[] camera = new byte[0x200], movement = new byte[0x200];
@@ -659,7 +681,15 @@ static (int Rva, byte[] Code)[] CodeFixture(bool duplicateMovement = false, bool
     byte[] health = Convert.FromHexString("4439B84C0300007F1E");
     health.CopyTo(movement, 0xDE);
     if (duplicateMovement) health.CopyTo(movement, 0x120);
-    return [(cameraRva, camera), (movementRva, movement)];
+    var sections = new List<(int Rva, byte[] Code)> { (cameraRva, camera), (movementRva, movement) };
+    if (decoyCameraEntry)
+    {
+        byte[] decoy = new byte[0x40];
+        Convert.FromHexString("488B4F38488B01FF90E804000084C0756D").CopyTo(decoy, 4);
+        sections.Add((0x900000, decoy));
+    }
+    if (duplicateCameraCandidate) sections.Add((0x910000, camera.ToArray()));
+    return sections.ToArray();
 }
 
 static string TempDirectory()

@@ -126,3 +126,13 @@ Transient observations after a completed write end the current hold and restore 
 - `VEngineCvar007` remains at tier0.dll RVA 3851888. A complete live registry traversal validated unique `mat_fullbright` and `spec_freeze_time` entries with the expected types and restriction flags.
 - Camera entry/death-load RVAs remain 0x8827BC/0x8827E7, the camera comparison remains at 0x88280C with an updated RIP-relative displacement, and the movement health comparison remains at 0x8C4ADE. Restore-only commands verified the exact bytes against the loaded module.
 - Live `snapshot` completed on build 14189 with no warnings. The full C# suite passed 60/60.
+
+## Automatic runtime discovery — 2026-10-06
+
+- Exact reviewed profiles remain the preferred path. Unknown client fingerprints run the bundled `cs2-dumper` 0.1.3 only after its SHA-256 matches the pinned value, then publish a cache by atomic directory rename.
+- The generated profile is accepted only for the same running CS2 process and the same `client.dll` SHA-256. CameraProbe separately validates every consumed schema field, global RVA, `VEngineCvar007`, unique camera patterns, movement-health pattern, decoded field displacements and relative call targets.
+- Recovery journals created by this version contain both the client fingerprint and discovered code-layout fingerprint. Legacy journals are accepted only through an immutable reviewed layout.
+- The internal `--force-auto-discovery` option bypasses an available reviewed profile for diagnostics. Startup always prints the selected source and short client/code fingerprints.
+- The first live run exposed two identical camera-entry prefixes in the current 14189 client. The locator now evaluates the bounded death-time and comparison structure around every prefix, accepts exactly one complete candidate and still rejects two complete candidates. A decoy and duplicate-complete regression test cover both cases.
+- Live normal and forced runs completed `snapshot`, `cvars`, `camera-restore` and `movement-restore` on build 14189. Both paths reported client `7081d87fd499` and code-layout fingerprint `4b0ff2cb79ce`; all 5 consumed globals, 40 schema fields and the ConVar interface matched.
+- Full suite after the live correction: 73/73. The self-contained Windows x64 package includes the pinned tool, license, reviewed profiles and bilingual instructions, contains no PDB files, and has a SHA-256 sidecar.
